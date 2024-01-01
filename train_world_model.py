@@ -3,27 +3,29 @@ from typing import Tuple
 
 import gym
 import numpy as np
+import jax.numpy as jnp
 import tqdm
 from absl import app, flags
 from ml_collections import config_flags
 from tensorboardX import SummaryWriter
 
-import wandb
 import wrappers
 from dataset_utils import D4RLDataset, split_into_trajectories
 from evaluation import evaluate
-from learner import Learner
+from model_learner import Learner
+from flax.training import checkpoints, orbax_utils
+import orbax
 
 FLAGS = flags.FLAGS
 
+#flags.DEFINE_string('env_name', 'antmaze-large-play-v0', 'Environment name.')
 flags.DEFINE_string('env_name', 'antmaze-medium-play-v0', 'Environment name.')
 flags.DEFINE_string('save_dir', './tmp/', 'Tensorboard logging dir.')
-flags.DEFINE_string('wandb_key', '', 'Wandb key')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
-flags.DEFINE_integer('eval_episodes', 10,
+flags.DEFINE_integer('eval_episodes', 100,
                      'Number of episodes used for evaluation.')
-flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
-flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
+flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
+flags.DEFINE_integer('eval_interval', 100000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
@@ -79,25 +81,12 @@ def make_env_and_dataset(env_name: str,
 
 
 def main(_):
-    wandb.login(key=FLAGS.wandb_key)
-    run = wandb.init(
-	# Set the project where this run will be logged
-	project="IQL",
-	# Track hyperparameters and run metadata
-	config={
-	    "env_name": FLAGS.env_name,
-	    "seed": FLAGS.seed,
-	},
-    )
-
     summary_writer = SummaryWriter(os.path.join(FLAGS.save_dir, 'tb',
                                                 str(FLAGS.seed)),
                                    write_to_disk=True)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
 
     env, dataset = make_env_and_dataset(FLAGS.env_name, FLAGS.seed)
-   
-    eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
     kwargs = dict(FLAGS.config)
     agent = Learner(FLAGS.seed,
@@ -107,36 +96,55 @@ def main(_):
                     **kwargs)
 
     eval_returns = []
-    for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),
+    pbar = tqdm.tqdm(range(0, FLAGS.max_steps),
                        smoothing=0.1,
-                       disable=not FLAGS.tqdm):
+                       disable=not FLAGS.tqdm)
+
+    ckpt = {'model': agent.model.params}
+    orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    save_args = orbax_utils.save_args_from_target(ckpt)
+    orbax_checkpointer.save('./tmp/flax_ckpt/orbax/single_save/', ckpt, save_args=save_args, force=True)
+
+    lossD, lossR, lossP = [], [], []
+    for i in pbar:
         batch = dataset.sample(FLAGS.batch_size)
 
         update_info = agent.update(batch)
-
+        lossD.append(float(update_info['lossD']))
+        lossR.append(float(update_info['lossR']))
+        lossP.append(float(update_info['lossP']))
         if i % FLAGS.log_interval == 0:
+            #print(type(lossD[0]), lossD[0])
+            #lossD = jnp.stack(lossD, axis=0); lossR = jnp.stack(lossR, axis=0); lossP = jnp.stack(lossP, axis=0)
+            lossD = np.mean(lossD); lossR = np.mean(lossR); lossP = np.mean(lossP)
+            #lossD = jnp.mean(lossD); lossR = jnp.mean(lossR); lossP = jnp.mean(lossP)
+            pbar.set_postfix({'lossD': lossD, 'lossR': lossR, 'lossP': lossP})
+            lossD, lossR, lossP = [], [], []
             for k, v in update_info.items():
                 if v.ndim == 0:
                     summary_writer.add_scalar(f'training/{k}', v, i)
-                    run.log({f'training/{k}': v}, step=i)
                 else:
                     summary_writer.add_histogram(f'training/{k}', v, i)
-                    run.log({f'training/{k}': wandb.Histogram(v)}, step=i)
             summary_writer.flush()
 
         if i % FLAGS.eval_interval == 0:
-            #eval_stats = evaluate(agent, env, FLAGS.eval_episodes)
-            eval_stats = evaluate(agent, eval_envs)
+            '''
+            eval_stats = evaluate(agent, env, FLAGS.eval_episodes)
 
             for k, v in eval_stats.items():
                 summary_writer.add_scalar(f'evaluation/average_{k}s', v, i)
-                run.log({f'evaluation/average_{k}s': v}, step=i)
             summary_writer.flush()
 
             eval_returns.append((i, eval_stats['return']))
             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),
                        eval_returns,
                        fmt=['%d', '%.1f'])
+            '''
+            ckpt = {'model': agent.model.params}
+            save_args = orbax_utils.save_args_from_target(ckpt)
+            orbax_checkpointer.save('./tmp/flax_ckpt/orbax/single_save/', ckpt, save_args=save_args, force=True)
+
 
 if __name__ == '__main__':
     app.run(main)
+

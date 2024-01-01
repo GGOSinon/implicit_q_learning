@@ -1,11 +1,41 @@
-from typing import Dict
+from typing import Dict, List
 
 import flax.linen as nn
 import gym
 import numpy as np
+import copy
+import time
+from tqdm import tqdm
 
+def evaluate(agent: nn.Module, envs: List[gym.Env]) -> Dict[str, float]:
+    stats = {'return': [], 'length': []}
+    
+    num_episodes = envs.num_envs
+    s = time.time()
+    terms = np.zeros(num_episodes, dtype=np.int32)
+    dones = np.zeros(num_episodes, dtype=np.bool)
+    observations, dones = envs.reset(), np.zeros(num_episodes, dtype=np.bool)
+    step = 0
+    while True:
+        step += 1
+        if np.all(terms > 0): break
+        actions = agent.sample_actions(observations, temperature=0.0)
+        actions = np.array(actions)
+        observations, rewards, dones, infos = envs.step(actions)
+        stats['return'].append(rewards)
+        stats['length'].append(np.ones(num_episodes))
+        for i in range(num_episodes): 
+            if dones[i] and terms[i] == 0:
+                terms[i] = step
 
-def evaluate(agent: nn.Module, env: gym.Env,
+    for k, v in stats.items():
+        tmp = []; v = np.array(v) 
+        for i in range(num_episodes):
+            tmp.append(np.sum(v[:terms[i], i]))
+        stats[k] = np.mean(tmp)
+    return stats
+
+def _evaluate(agent: nn.Module, env: gym.Env,
              num_episodes: int) -> Dict[str, float]:
     stats = {'return': [], 'length': []}
 
