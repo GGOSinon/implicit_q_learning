@@ -18,6 +18,7 @@ from learner import Learner
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('env_name', 'antmaze-medium-play-v0', 'Environment name.')
+flags.DEFINE_string('load_dir', None, 'Dynamics model load dir')
 flags.DEFINE_string('save_dir', './tmp/', 'Tensorboard logging dir.')
 flags.DEFINE_string('wandb_key', '', 'Wandb key')
 flags.DEFINE_string('dynamics', 'ensemble', 'Wandb key')
@@ -100,8 +101,12 @@ def main(_):
                     **kwargs)
 
     if FLAGS.dynamics != 'oracle':
+        if FLAGS.load_dir is None:
+            file_dir = os.path.join('models', FLAGS.env_name, FLAGS.dynamics) 
+        else:
+            file_dir = FLAGS.load_dir
         orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-        raw_restored = orbax_checkpointer.restore(os.path.join('models', FLAGS.env_name, FLAGS.dynamics))
+        raw_restored = orbax_checkpointer.restore(file_dir)
         print(raw_restored.keys())
         agent.model = agent.model.replace(params = raw_restored['model'])
 
