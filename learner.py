@@ -6,13 +6,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import gym
 
 import policy
 import value_net
 from actor import update as awr_update_actor
 from common import Batch, InfoDict, Model, PRNGKey
 from critic import update_q, update_v
-
+from dynamics.ensemble_model_learner import EnsembleWorldModel
+from dynamics.model_learner import WorldModel
+from dynamics.oracle import MujocoOracleDynamics
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     new_target_params = jax.tree_map(
@@ -24,17 +27,17 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 
 @jax.jit
 def _update_jit(
-    rng: PRNGKey, actor: Model, critic: Model, value: Model,
+        rng: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
     target_critic: Model, batch: Batch, discount: float, tau: float,
     expectile: float, temperature: float
 ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, InfoDict]:
 
     new_value, value_info = update_v(target_critic, value, batch, expectile)
-    key, rng = jax.random.split(rng)
+    key, key2, rng = jax.random.split(rng, 3)
     new_actor, actor_info = awr_update_actor(key, actor, target_critic,
                                              new_value, batch, temperature)
 
-    new_critic, critic_info = update_q(critic, new_value, batch, discount)
+    new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=0.95, H=1)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
@@ -50,6 +53,8 @@ class Learner(object):
                  seed: int,
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
+                 dynamics: str = None,
+                 env_name: str = None,
                  actor_lr: float = 3e-4,
                  value_lr: float = 3e-4,
                  critic_lr: float = 3e-4,
@@ -60,10 +65,17 @@ class Learner(object):
                  temperature: float = 0.1,
                  dropout_rate: Optional[float] = None,
                  max_steps: Optional[int] = None,
-                 opt_decay_schedule: str = "cosine"):
+                 opt_decay_schedule: str = "cosine",
+                 num_models: int = 7,
+                 num_elites: int = 5,
+                 model_hidden_dims: Sequence[int] = (256, 256, 256, 256),  
+                 **kwargs):
         """
         An implementation of the version of Soft-Actor-Critic described in https://arxiv.org/abs/1801.01290
         """
+
+        obs_dim = observations.shape[-1] 
+        action_dim = actions.shape[-1]
 
         self.expectile = expectile
         self.tau = tau
@@ -71,7 +83,17 @@ class Learner(object):
         self.temperature = temperature
 
         rng = jax.random.PRNGKey(seed)
-        rng, actor_key, critic_key, value_key = jax.random.split(rng, 4)
+        rng, model_key, actor_key, critic_key, value_key = jax.random.split(rng, 5)
+
+        self.dynamics = dynamics
+        if dynamics == 'ensemble':
+            model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
+            model = Model.create(model_def, inputs=[model_key, observations, actions], tx=None)
+        if dynamics == 'single':
+            model_def = WorldModel(model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
+            model = Model.create(model_def, inputs=[model_key, observations, actions], tx=None)
+        if dynamics == 'oracle':
+            model = MujocoOracleDynamics(env)
 
         action_dim = actions.shape[-1]
         actor_def = policy.NormalTanhPolicy(hidden_dims,
@@ -109,6 +131,7 @@ class Learner(object):
         self.actor = actor
         self.critic = critic
         self.value = value
+        self.model = model
         self.target_critic = target_critic
         self.rng = rng
 
@@ -125,7 +148,7 @@ class Learner(object):
 
     def update(self, batch: Batch) -> InfoDict:
         new_rng, new_actor, new_critic, new_value, new_target_critic, info = _update_jit(
-            self.rng, self.actor, self.critic, self.value, self.target_critic,
+            self.rng, self.actor, self.critic, self.value, self.model, self.target_critic,
             batch, self.discount, self.tau, self.expectile, self.temperature)
 
         self.rng = new_rng

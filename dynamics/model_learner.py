@@ -37,33 +37,7 @@ def _update_jit(
     new_model, info = model.apply_gradient(loss_fn)
 
     return rng, new_model, info
-
-class EnsembleWorldModel(nn.Module):
-    num_models: int
-    num_elites: int
-    hidden_dims: Sequence[int]
-    obs_dim: int
-    action_dim: int
-    dropout_rate: Optional[float] = None
-
-    def setup(self):
-        self.models = [WorldModel() for _ in range(num_models)]
-
-    def __call__(self,
-                 observations: jnp.ndarray,
-                 actions: jnp.ndarray,
-                 training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-       
-        s_hat, sN_hat, r_hat = self.models
-        z = self.encoder(observations, training=training)
-        zN = z + self.dynamics_head(jnp.concatenate([z, actions], axis=1), training=training)
-
-        s_hat = self.decoder(z, training=training)
-        sN_hat = self.decoder(zN, training=training)
-        r_hat = self.reward_head(jnp.concatenate([z, actions], axis=1), training=training)
-
-        return s_hat, sN_hat, r_hat
-
+        
 class _WorldModel(nn.Module):
     hidden_dims: Sequence[int]
     obs_dim: int
@@ -103,9 +77,10 @@ class WorldModel(nn.Module):
     _max: Optional[float] = 0.5
 
     def setup(self):
-        self.encoder = MLP(self.hidden_dims, activate_final=True, dropout_rate=self.dropout_rate)
-        self.dynamics_head = MLP([self.obs_dim * 2], activate_final=False, dropout_rate=self.dropout_rate)
-        self.reward_head = MLP([1], activate_final=False, dropout_rate=self.dropout_rate)
+        self.encoder = MLP(self.hidden_dims[:-1], activate_final=True, dropout_rate=self.dropout_rate)
+        self.dynamics_head = MLP([self.hidden_dims[-1], self.obs_dim * 2], activate_final=False, dropout_rate=self.dropout_rate)
+        self.reward_head = MLP([self.hidden_dims[-1], 1], activate_final=False, dropout_rate=self.dropout_rate)
+        self.mask_head = MLP([self.hidden_dims[-1], 1], activate_final=False, dropout_rate=self.dropout_rate)
 
     def __call__(self,
                  observations: jnp.ndarray,
@@ -113,13 +88,16 @@ class WorldModel(nn.Module):
                  training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         
         z = self.encoder(jnp.concatenate([observations, actions], axis=1), training=training)
+
         zN_dist = self.dynamics_head(z, training=training)
         mu, logvar = zN_dist[:, :self.obs_dim], zN_dist[:, self.obs_dim:]
         logvar = jnp.clip(logvar, self._min, self._max)
 
         r_hat = self.reward_head(z, training=training)
+        
+        mask_hat = self.mask_head(z, training=training)
 
-        return (mu, logvar), r_hat
+        return (mu, logvar), r_hat, mask_hat
 
 class Learner(object):
     def __init__(self,
@@ -127,7 +105,7 @@ class Learner(object):
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
                  lr: float = 3e-4,
-                 model_hidden_dims: Sequence[int] = (1024, 1024, 1024, 1024),
+                 model_hidden_dims: Sequence[int] = (256, 256, 256, 256),
                  dropout_rate: Optional[float] = None,
                  max_steps: Optional[int] = None,
                  opt_decay_schedule: str = "cosine",
@@ -135,7 +113,7 @@ class Learner(object):
         """
         An implementation of the version of Soft-Actor-Critic described in https://arxiv.org/abs/1801.01290
         """
-        print(dropout_rate, model_hidden_dims, max_steps)
+        #print(dropout_rate, model_hidden_dims, max_steps)
 
         rng = jax.random.PRNGKey(seed)
         rng, model_key = jax.random.split(rng, 2)

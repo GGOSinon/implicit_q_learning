@@ -10,6 +10,7 @@ from tensorboardX import SummaryWriter
 
 import wandb
 import wrappers
+import orbax.checkpoint
 from dataset_utils import D4RLDataset, split_into_trajectories
 from evaluation import evaluate
 from learner import Learner
@@ -19,6 +20,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('env_name', 'antmaze-medium-play-v0', 'Environment name.')
 flags.DEFINE_string('save_dir', './tmp/', 'Tensorboard logging dir.')
 flags.DEFINE_string('wandb_key', '', 'Wandb key')
+flags.DEFINE_string('dynamics', 'ensemble', 'Wandb key')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
@@ -54,8 +56,8 @@ def normalize(dataset):
     dataset.rewards *= 1000.0
 
 
-def make_env_and_dataset(env_name: str,
-                         seed: int) -> Tuple[gym.Env, D4RLDataset]:
+def make_env_and_dataset(env_name,
+                         seed) -> Tuple[gym.Env, D4RLDataset]:
     env = gym.make(env_name)
 
     env = wrappers.EpisodeMonitor(env)
@@ -79,17 +81,6 @@ def make_env_and_dataset(env_name: str,
 
 
 def main(_):
-    wandb.login(key=FLAGS.wandb_key)
-    run = wandb.init(
-	# Set the project where this run will be logged
-	project="IQL",
-	# Track hyperparameters and run metadata
-	config={
-	    "env_name": FLAGS.env_name,
-	    "seed": FLAGS.seed,
-	},
-    )
-
     summary_writer = SummaryWriter(os.path.join(FLAGS.save_dir, 'tb',
                                                 str(FLAGS.seed)),
                                    write_to_disk=True)
@@ -104,7 +95,27 @@ def main(_):
                     env.observation_space.sample()[np.newaxis],
                     env.action_space.sample()[np.newaxis],
                     max_steps=FLAGS.max_steps,
+                    dynamics=FLAGS.dynamics,
+                    env_name=FLAGS.env_name,
                     **kwargs)
+
+    if FLAGS.dynamics != 'oracle':
+        orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+        raw_restored = orbax_checkpointer.restore(os.path.join('models', FLAGS.env_name, FLAGS.dynamics))
+        print(raw_restored.keys())
+        agent.model = agent.model.replace(params = raw_restored['model'])
+
+    wandb.login(key=FLAGS.wandb_key)
+    run = wandb.init(
+	# Set the project where this run will be logged
+	project="IQL",
+        name=f"{FLAGS.env_name}_{FLAGS.seed}",
+	# Track hyperparameters and run metadata
+	config={
+	    "env_name": FLAGS.env_name,
+	    "seed": FLAGS.seed,
+	},
+    )
 
     eval_returns = []
     for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),

@@ -22,6 +22,7 @@ def update(key: PRNGKey, actor: Model, critic: Model, value: Model,
                            rngs={'dropout': key})
         log_probs = dist.log_prob(batch.actions)
         actor_loss = -(exp_a * log_probs).mean()
+        #jax.debug.print('{x}, {y}', x=actor_loss, y=log_probs.mean())
 
         return actor_loss, {'actor_loss': actor_loss, 'adv': q - v}
 
