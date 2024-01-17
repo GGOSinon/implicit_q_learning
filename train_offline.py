@@ -11,7 +11,7 @@ from tensorboardX import SummaryWriter
 import wandb
 import wrappers
 import orbax.checkpoint
-from dataset_utils import D4RLDataset, split_into_trajectories
+from dataset_utils import D4RLDataset, split_into_trajectories, ReplayBuffer
 from evaluation import evaluate
 from learner import Learner
 
@@ -21,13 +21,17 @@ flags.DEFINE_string('env_name', 'antmaze-medium-play-v0', 'Environment name.')
 flags.DEFINE_string('load_dir', None, 'Dynamics model load dir')
 flags.DEFINE_string('save_dir', './tmp/', 'Tensorboard logging dir.')
 flags.DEFINE_string('wandb_key', '', 'Wandb key')
-flags.DEFINE_string('dynamics', 'ensemble', 'Wandb key')
+flags.DEFINE_string('dynamics', 'ensemble', 'Dynamics model')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
+flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
+flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
+flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
+flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
 config_flags.DEFINE_config_file(
@@ -107,8 +111,9 @@ def main(_):
             file_dir = FLAGS.load_dir
         orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
         raw_restored = orbax_checkpointer.restore(file_dir)
-        print(raw_restored.keys())
         agent.model = agent.model.replace(params = raw_restored['model'])
+
+    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=1250000)
 
     wandb.login(key=FLAGS.wandb_key)
     run = wandb.init(
@@ -122,13 +127,22 @@ def main(_):
 	},
     )
 
+    model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
+    data_batch_size = FLAGS.batch_size - model_batch_size
+
     eval_returns = []
     for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),
                        smoothing=0.1,
                        disable=not FLAGS.tqdm):
-        batch = dataset.sample(FLAGS.batch_size)
 
-        update_info = agent.update(batch)
+        if (i - 1) % FLAGS.rollout_freq == 0:
+            data_batch = dataset.sample(FLAGS.rollout_batch_size)
+            rollout = agent.rollout(data_batch.observations, FLAGS.rollout_length)
+            rollout_dataset.insert_batch(rollout['obss'], rollout['actions'], rollout['rewards'], rollout['masks'], 1 - rollout['masks'], rollout['next_obss'])
+
+        data_batch = dataset.sample(FLAGS.batch_size)
+        model_batch = rollout_dataset.sample(FLAGS.batch_size)
+        update_info = agent.update(data_batch, model_batch)
 
         if i % FLAGS.log_interval == 0:
             for k, v in update_info.items():
@@ -145,11 +159,13 @@ def main(_):
             eval_stats = evaluate(agent, eval_envs)
 
             for k, v in eval_stats.items():
+                if k == 'return':
+                    v = env.get_normalized_score(v)
                 summary_writer.add_scalar(f'evaluation/average_{k}s', v, i)
                 run.log({f'evaluation/average_{k}s': v}, step=i)
             summary_writer.flush()
 
-            eval_returns.append((i, eval_stats['return']))
+            eval_returns.append((i, env.get_normalized_score(eval_stats['return'])))
             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),
                        eval_returns,
                        fmt=['%d', '%.1f'])

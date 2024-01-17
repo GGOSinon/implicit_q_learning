@@ -167,3 +167,22 @@ class ReplayBuffer(Dataset):
 
         self.insert_index = (self.insert_index + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
+
+    def insert_batch(self, observations: np.ndarray, actions: np.ndarray,
+               rewards: float, masks: float, dones_float: float,
+               next_observations: np.ndarray):
+        batch_size = observations.shape[0]
+        if self.insert_index + batch_size > self.capacity:
+            p = self.capacity - self.insert_index
+            self.insert_batch(observations[:p], actions[:p], rewards[:p], masks[:p], dones_float[:p], next_observations[:p])
+            self.insert_batch(observations[p:], actions[p:], rewards[p:], masks[p:], dones_float[p:], next_observations[p:])
+            return
+        self.observations[self.insert_index:self.insert_index + batch_size] = observations
+        self.actions[self.insert_index:self.insert_index + batch_size] = actions
+        self.rewards[self.insert_index:self.insert_index + batch_size] = rewards
+        self.masks[self.insert_index:self.insert_index + batch_size] = masks
+        self.dones_float[self.insert_index:self.insert_index + batch_size] = dones_float
+        self.next_observations[self.insert_index:self.insert_index + batch_size] = next_observations
+
+        self.insert_index = (self.insert_index + batch_size) % self.capacity
+        self.size = min(self.size + batch_size, self.capacity)

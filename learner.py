@@ -13,7 +13,7 @@ import value_net
 from actor import update as awr_update_actor
 from common import Batch, InfoDict, Model, PRNGKey
 from critic import update_q, update_v
-from dynamics.ensemble_model_learner import EnsembleWorldModel
+from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step
 from dynamics.model_learner import WorldModel
 from dynamics.oracle import MujocoOracleDynamics
 
@@ -28,16 +28,24 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 @jax.jit
 def _update_jit(
         rng: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
-    target_critic: Model, batch: Batch, discount: float, tau: float,
-    expectile: float, temperature: float
-) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, InfoDict]:
+        target_critic: Model, data_batch: Batch, model_batch: Batch, discount: float, tau: float,
+        expectile: float, temperature: float
+    ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, InfoDict]:
 
-    new_value, value_info = update_v(target_critic, value, batch, expectile)
+    mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
+                      actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
+                      rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
+                      masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
+                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
+
+    new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
     key, key2, rng = jax.random.split(rng, 3)
     new_actor, actor_info = awr_update_actor(key, actor, target_critic,
-                                             new_value, batch, temperature)
+                                             new_value, mix_batch, temperature)
 
-    new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=0.95, H=1)
+    #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
+    new_critic, critic_info = update_q(key2, critic, target_critic, model, actor,
+                                       data_batch, model_batch, discount, lamb=1.0, H=5)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
@@ -146,10 +154,40 @@ class Learner(object):
         actions = np.asarray(actions)
         return np.clip(actions, -1, 1)
 
-    def update(self, batch: Batch) -> InfoDict:
+    def step(self,
+             observations: np.ndarray,
+             actions: np.ndarray) -> np.ndarray:
+        rng, sN, rewards, masks = sample_step(self.rng, self.model, observations, actions)
+        self.rng = rng
+
+        return sN, rewards, masks
+
+    def rollout(self,
+                observations: np.ndarray,
+                rollout_length: int) -> np.ndarray:
+        states, actions, rewards, masks = [observations], [], [], []
+
+        for _ in range(rollout_length):
+            action = self.sample_actions(states[-1])
+            next_obs, reward, mask = self.step(states[-1], action)
+            states.append(next_obs)
+            actions.append(action)
+            rewards.append(reward)
+            masks.append(mask)
+
+        obss = np.concatenate(states[:-1], axis=0)
+        next_obss = np.concatenate(states[1:], axis=0)
+        actions = np.concatenate(actions, axis=0)
+        rewards = np.concatenate(rewards, axis=0)
+        masks = np.concatenate(masks, axis=0)
+
+        return {'obss': obss, 'actions': actions, 'rewards': rewards, 'masks': masks, 'next_obss': next_obss}
+        
+
+    def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
         new_rng, new_actor, new_critic, new_value, new_target_critic, info = _update_jit(
             self.rng, self.actor, self.critic, self.value, self.model, self.target_critic,
-            batch, self.discount, self.tau, self.expectile, self.temperature)
+            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature)
 
         self.rng = new_rng
         self.actor = new_actor

@@ -93,9 +93,8 @@ class WorldModel(nn.Module):
         mu, logvar = zN_dist[:, :self.obs_dim], zN_dist[:, self.obs_dim:]
         logvar = jnp.clip(logvar, self._min, self._max)
 
-        r_hat = self.reward_head(z, training=training)
-        
-        mask_hat = self.mask_head(z, training=training)
+        r_hat = self.reward_head(z, training=training).squeeze(1) 
+        mask_hat = self.mask_head(z, training=training).squeeze(1)
 
         return (mu, logvar), r_hat, mask_hat
 
@@ -105,7 +104,7 @@ class Learner(object):
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
                  lr: float = 3e-4,
-                 model_hidden_dims: Sequence[int] = (256, 256, 256, 256),
+                 model_hidden_dims: Sequence[int] = None,
                  dropout_rate: Optional[float] = None,
                  max_steps: Optional[int] = None,
                  opt_decay_schedule: str = "cosine",

@@ -44,6 +44,13 @@ def evaluate(model, validation_data, batch_size):
         'lossD': jnp.mean(lossD, axis=0),
     } 
 
+def sample_step(rng, model, observations, actions):
+    sN_dist, r_hat, mask_hat = model(observations, actions); means, log_vars = sN_dist
+    sN_hat = means
+    sN_hat, r_hat, mask_hat = sN_hat[:, 0], r_hat[:, 0], mask_hat[:, 0]
+    return rng, sN_hat, r_hat, mask_hat
+    #sN_dist = tfd.MultivariateNormalDiag(loc=means
+
 @jax.jit
 def _update_jit(
     rng: PRNGKey, model: Model, batch: Batch 
@@ -165,4 +172,3 @@ class Learner(object):
         self.model = new_model
 
         return info
-
