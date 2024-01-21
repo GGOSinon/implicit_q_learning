@@ -23,6 +23,6 @@ def get_config():
     config.num_models = 7
     config.num_elites = 5
     config.model_lr = 3e-4
-    config.model_hidden_dims = (256, 256, 256, 256)
+    config.model_hidden_dims = (200, 200, 200, 200)
 
     return config

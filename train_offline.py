@@ -104,7 +104,10 @@ def main(_):
                     env_name=FLAGS.env_name,
                     **kwargs)
 
-    if FLAGS.dynamics != 'oracle':
+    if FLAGS.dynamics == 'torch':
+        agent.model.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', FLAGS.env_name))
+
+    elif FLAGS.dynamics != 'oracle':
         if FLAGS.load_dir is None:
             file_dir = os.path.join('models', FLAGS.env_name, FLAGS.dynamics) 
         else:

@@ -3,6 +3,7 @@ from typing import Tuple
 import jax.numpy as jnp
 import jax
 
+import numpy as np
 from common import Batch, InfoDict, Model, Params, PRNGKey
 
 
@@ -138,9 +139,10 @@ def _update_q(key: PRNGKey, critic: Model, target_value: Model, target_critic: M
     return new_critic, info
 
 # COMBO
-def update_q(key: PRNGKey, critic: Model, target_critic: Model, model: Model, actor: Model,
+def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #model: Model
              data_batch: Batch, model_batch: Batch, discount: float, lamb: float, H: float) -> Tuple[Model, InfoDict]:
 
+    key1, key2, key3, key4 = jax.random.split(key, 4)
     alpha = 0.2
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0), 
@@ -148,30 +150,37 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, model: Model, ac
                       masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
 
-    next_a = actor(mix_batch.next_observations).sample(seed=key)
+    next_a = actor(mix_batch.next_observations).sample(seed=key1)
     next_q1, next_q2 = target_critic(mix_batch.next_observations, next_a); next_q = jnp.minimum(next_q1, next_q2)
     target_q = mix_batch.rewards + discount * mix_batch.masks * next_q
 
-    ############
+    ###### CQL ######
 
     num_repeat = 10; N = mix_batch.observations.shape[0]
-    Robs = jnp.tile(mix_batch.observations, (num_repeat, 1)) 
-    Rnext_obs = jnp.tile(mix_batch.next_observations, (num_repeat, 1))
+    Robs = mix_batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
+    Rnext_obs = mix_batch.next_observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
 
-    Ra = actor(Robs).sample(seed=key); Rnext_a = actor(Rnext_obs).sample(seed=key)
-    Rrandom_action = jax.random.uniform(key, Ra.shape, minval=-1., maxval=1.)
+    Ra_dist = actor(Robs); Rnext_a_dist = actor(Rnext_obs)
+    Ra = Ra_dist.sample(seed=key2); Rnext_a = Rnext_a_dist.sample(seed=key3)
+    log_prob_Ra = Ra_dist.log_prob(Ra); log_prob_Rnext_a = Rnext_a_dist.log_prob(Rnext_a)
+    Rrandom_action = jax.random.uniform(key4, Ra.shape, minval=-1., maxval=1.)
+    log_prob_rand = np.log(0.5) * Ra.shape[-1]
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1, q2 = critic.apply({'params': critic_params}, mix_batch.observations, mix_batch.actions)
-        critic_loss = (loss(target_q - q1, 0.5) + loss(target_q - q2, 0.5)).mean()
+        #critic_loss = (loss(target_q - q1, 0.5) + loss(target_q - q2, 0.5)).mean()
+        critic_loss = ((target_q - q1) ** 2 + (target_q - q2) ** 2).mean()
 
         obs_pi_value1, obs_pi_value2 = critic.apply({'params': critic_params}, Robs, Ra)
+        obs_pi_value1, obs_pi_value2 = obs_pi_value1 - log_prob_Ra, obs_pi_value2 - log_prob_Ra 
         obs_pi_value1, obs_pi_value2 = obs_pi_value1.reshape((N, num_repeat)), obs_pi_value2.reshape((N, num_repeat))
 
-        next_obs_pi_value1, next_obs_pi_value2 = critic.apply({'params': critic_params}, Rnext_obs, Rnext_a)
+        next_obs_pi_value1, next_obs_pi_value2 = critic.apply({'params': critic_params}, Robs, Rnext_a)
+        next_obs_pi_value1, next_obs_pi_value2 = next_obs_pi_value1 - log_prob_Rnext_a, next_obs_pi_value2 - log_prob_Rnext_a 
         next_obs_pi_value1, next_obs_pi_value2 = next_obs_pi_value1.reshape((N, num_repeat)), next_obs_pi_value2.reshape((N, num_repeat))
 
         random_value1, random_value2 = critic.apply({'params': critic_params}, Robs, Rrandom_action)
+        random_value1, random_value2 = random_value1 - log_prob_rand, random_value2 - log_prob_rand
         random_value1, random_value2 = random_value1.reshape((N, num_repeat)), random_value2.reshape((N, num_repeat))
 
         cat_q1 = jnp.concatenate([obs_pi_value1, next_obs_pi_value1, random_value1], axis=1)
