@@ -140,7 +140,7 @@ def _update_q(key: PRNGKey, critic: Model, target_value: Model, target_critic: M
 
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #model: Model
-             data_batch: Batch, model_batch: Batch, discount: float, lamb: float, H: float) -> Tuple[Model, InfoDict]:
+        data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float) -> Tuple[Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
     alpha = 0.2
@@ -191,7 +191,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #m
         q1_model, q2_model = critic.apply({'params': critic_params}, model_batch.observations, model_batch.actions)
 
         conservative_loss = -(q1_data + q2_data).mean() + (cat_q1 + cat_q2).mean()
-        critic_loss = critic_loss + conservative_loss * 5.0
+        critic_loss = critic_loss + conservative_loss * cql_weight
         return critic_loss, {
             'critic_loss': critic_loss,
             'q1_data': q1_data.mean(), 'q1_model': q1_model.mean(),

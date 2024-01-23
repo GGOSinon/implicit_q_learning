@@ -31,6 +31,7 @@ flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
+flags.DEFINE_float('cql_weight', None, 'CQL weight')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
@@ -102,6 +103,7 @@ def main(_):
                     max_steps=FLAGS.max_steps,
                     dynamics=FLAGS.dynamics,
                     env_name=FLAGS.env_name,
+                    cql_weight=FLAGS.cql_weight,
                     **kwargs)
 
     if FLAGS.dynamics == 'torch':
@@ -116,7 +118,7 @@ def main(_):
         raw_restored = orbax_checkpointer.restore(file_dir)
         agent.model = agent.model.replace(params = raw_restored['model'])
 
-    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=1250000)
+    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=5*FLAGS.rollout_length*FLAGS.rollout_batch_size)
 
     wandb.login(key=FLAGS.wandb_key)
     run = wandb.init(

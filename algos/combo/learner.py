@@ -33,7 +33,7 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 def _update_jit(
         rng: PRNGKey, actor: Model, critic: Model, value: Model, #model: Model,
         target_critic: Model, data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float
+        expectile: float, temperature: float, cql_weight: float, sac_alpha: float,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, InfoDict]:
 
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
@@ -45,11 +45,11 @@ def _update_jit(
     new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
     key, key2, rng = jax.random.split(rng, 3)
     new_actor, actor_info = update_actor(key, actor, target_critic,
-                                             new_value, mix_batch, temperature)
+                                             new_value, mix_batch, temperature, sac_alpha)
 
     #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
     new_critic, critic_info = update_q(key2, critic, target_critic, actor, #model,
-                                       data_batch, model_batch, discount, lamb=1.0, H=5)
+                                       data_batch, model_batch, discount, cql_weight)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
@@ -81,6 +81,8 @@ class Learner(object):
                  num_models: int = 7,
                  num_elites: int = 5,
                  model_hidden_dims: Sequence[int] = (256, 256, 256),
+                 cql_weight: float = None,
+                 sac_alpha: float = 0.2,
                  **kwargs):
         """
         An implementation of the version of Soft-Actor-Critic described in https://arxiv.org/abs/1801.01290
@@ -93,6 +95,8 @@ class Learner(object):
         self.tau = tau
         self.discount = discount
         self.temperature = temperature
+        self.cql_weight = cql_weight
+        self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
         rng, model_key, actor_key, critic_key, value_key = jax.random.split(rng, 5)
@@ -206,7 +210,7 @@ class Learner(object):
     def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
         new_rng, new_actor, new_critic, new_value, new_target_critic, info = _update_jit(
             self.rng, self.actor, self.critic, self.value, self.target_critic,
-            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature)
+            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.sac_alpha)
 
         self.rng = new_rng
         self.actor = new_actor
