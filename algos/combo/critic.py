@@ -143,7 +143,6 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #m
         data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float) -> Tuple[Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
-    alpha = 0.2
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0), 
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
@@ -165,6 +164,12 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #m
     log_prob_Ra = Ra_dist.log_prob(Ra); log_prob_Rnext_a = Rnext_a_dist.log_prob(Rnext_a)
     Rrandom_action = jax.random.uniform(key4, Ra.shape, minval=-1., maxval=1.)
     log_prob_rand = np.log(0.5) * Ra.shape[-1]
+
+    if False:
+        next_q1, next_q2 = target_critic(Rnext_obs, Rnext_a)
+        next_q1, next_q2 = next_q1.reshape(N, num_repeat).max(axis=1), next_q1.reshape(N, num_repeat).max(axis=1)
+        next_q = jnp.minimum(next_q1, next_q2)
+        target_q = mix_batch.rewards + discount * mix_batch.masks * next_q
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1, q2 = critic.apply({'params': critic_params}, mix_batch.observations, mix_batch.actions)

@@ -15,6 +15,12 @@ from common import MLP, Params, PRNGKey, default_init
 LOG_STD_MIN = -10.0
 LOG_STD_MAX = 2.0
 
+class SACalpha(nn.Module): 
+    @nn.compact
+    def __call__(self):
+        log_alpha = self.param('log_alpha', nn.initializers.zeros_init(), ())
+        return log_alpha
+
 
 class NormalTanhPolicy(nn.Module):
     hidden_dims: Sequence[int]

@@ -10,7 +10,7 @@ import gym
 
 import policy
 import value_net
-from algos.combo.actor import update_actor
+from algos.combo.actor import update_actor, update_alpha
 from common import Batch, InfoDict, Model, PRNGKey
 from algos.combo.critic import update_q, update_v
 from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step
@@ -31,11 +31,12 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 
 @jax.jit
 def _update_jit(
-        rng: PRNGKey, actor: Model, critic: Model, value: Model, #model: Model,
+        rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, #model: Model,
         target_critic: Model, data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float, cql_weight: float, sac_alpha: float,
+        expectile: float, temperature: float, cql_weight: float, target_entropy: float,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, InfoDict]:
 
+    log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
@@ -43,20 +44,22 @@ def _update_jit(
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
 
     new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
-    key, key2, rng = jax.random.split(rng, 3)
+    key, key2, key3, rng = jax.random.split(rng, 4)
     new_actor, actor_info = update_actor(key, actor, target_critic,
-                                             new_value, mix_batch, temperature, sac_alpha)
+                                             new_value, mix_batch, temperature, alpha)
+    new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
     #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
-    new_critic, critic_info = update_q(key2, critic, target_critic, actor, #model,
+    new_critic, critic_info = update_q(key3, critic, target_critic, actor, #model,
                                        data_batch, model_batch, discount, cql_weight)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
-    return rng, new_actor, new_critic, new_value, new_target_critic, {
+    return rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, {
         **critic_info,
         **value_info,
-        **actor_info
+        **actor_info,
+        **alpha_info,
     }
 
 
@@ -70,6 +73,7 @@ class Learner(object):
                  actor_lr: float = 3e-4,
                  value_lr: float = 3e-4,
                  critic_lr: float = 3e-4,
+                 alpha_lr: float = 1e-4,
                  hidden_dims: Sequence[int] = (256, 256),
                  discount: float = 0.99,
                  tau: float = 0.005,
@@ -82,7 +86,7 @@ class Learner(object):
                  num_elites: int = 5,
                  model_hidden_dims: Sequence[int] = (256, 256, 256),
                  cql_weight: float = None,
-                 sac_alpha: float = 0.2,
+                 #sac_alpha: float = 0.2,
                  **kwargs):
         """
         An implementation of the version of Soft-Actor-Critic described in https://arxiv.org/abs/1801.01290
@@ -96,10 +100,11 @@ class Learner(object):
         self.discount = discount
         self.temperature = temperature
         self.cql_weight = cql_weight
-        self.sac_alpha = sac_alpha
+        self.target_entropy = -action_dim
+        #self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
-        rng, model_key, actor_key, critic_key, value_key = jax.random.split(rng, 5)
+        rng, model_key, actor_key, alpha_key, critic_key, value_key = jax.random.split(rng, 6)
 
         self.dynamics = dynamics
         if dynamics == 'ensemble':
@@ -144,6 +149,11 @@ class Learner(object):
                              inputs=[actor_key, observations],
                              tx=optimiser)
 
+        alpha_def = policy.SACalpha()
+        alpha = Model.create(alpha_def,
+                             inputs=[alpha_key],
+                             tx=optax.adam(learning_rate=alpha_lr))
+
         critic_def = value_net.DoubleCritic(hidden_dims)
         critic = Model.create(critic_def,
                               inputs=[critic_key, observations, actions],
@@ -158,6 +168,7 @@ class Learner(object):
             critic_def, inputs=[critic_key, observations, actions])
 
         self.actor = actor
+        self.alpha = alpha
         self.critic = critic
         self.value = value
         self.model = model
@@ -208,12 +219,13 @@ class Learner(object):
         
 
     def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
-        new_rng, new_actor, new_critic, new_value, new_target_critic, info = _update_jit(
-            self.rng, self.actor, self.critic, self.value, self.target_critic,
-            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.sac_alpha)
+        new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, info = _update_jit(
+            self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic,
+            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy)
 
         self.rng = new_rng
         self.actor = new_actor
+        self.alpha = new_alpha
         self.critic = new_critic
         self.value = new_value
         self.target_critic = new_target_critic

@@ -8,7 +8,7 @@ from common import Batch, InfoDict, Model, Params, PRNGKey
 
 
 def loss(diff, expectile=0.8):
-    weight = jnp.where(diff > 0, expectile, (1 - expectile))
+    weight = jnp.where(diff > 0, expectile, (1 - expectile)) / (2 * expectile * (1 - expectile))
     return weight * (diff**2)
 
 
@@ -108,7 +108,7 @@ def _update_q(key: PRNGKey, critic: Model, target_value: Model, target_critic: M
 
         #q1_model, q2_model = critic.apply({'params': critic_params}, batch.observations, actions[0])
         q1_model, q2_model = critic.apply({'params': critic_params}, obs, a)
-        critic_loss_model = (loss(target_q_model - q1_model, 0.5) + loss(target_q_model - q2_model, 0.5)).mean()
+        critic_loss_model = (loss(target_q_model - q1_model, 0.1) + loss(target_q_model - q2_model, 0.1)).mean()
 
         obs_pi_value1, obs_pi_value2 = critic.apply({'params': critic_params}, obs, a)
         obs_pi_value1, obs_pi_value2 = obs_pi_value1.reshape((N, num_repeat)), obs_pi_value2.reshape((N, num_repeat))
@@ -140,19 +140,23 @@ def _update_q(key: PRNGKey, critic: Model, target_value: Model, target_critic: M
 
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #model: Model
-             data_batch: Batch, model_batch: Batch, discount: float, lamb: float, H: float) -> Tuple[Model, InfoDict]:
+        data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float) -> Tuple[Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
-    alpha = 0.2
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0), 
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
                       masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
 
-    next_a = actor(mix_batch.next_observations).sample(seed=key1)
-    next_q1, next_q2 = target_critic(mix_batch.next_observations, next_a); next_q = jnp.minimum(next_q1, next_q2)
-    target_q = mix_batch.rewards + discount * mix_batch.masks * next_q
+    next_a_data = actor(data_batch.next_observations).sample(seed=key1)
+    next_q1_data, next_q2_data = target_critic(data_batch.next_observations, next_a); next_q_data = jnp.minimum(next_q1_data, next_q2_data)
+
+    next_a_data = actor(model_batch.next_observations).sample(seed=key1)
+    next_q1_model, next_q2_model = target_critic(model_batch.next_observations, next_a); next_q_model = jnp.minimum(next_q1_model, next_q2_model)
+
+    target_q_data = data_batch.rewards + discount * data_batch.masks * next_q_data
+    target_q_model = model_batch.rewards + discount * model_batch.masks * next_q_model
 
     ###### CQL ######
 
@@ -167,9 +171,15 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #m
     log_prob_rand = np.log(0.5) * Ra.shape[-1]
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
-        q1, q2 = critic.apply({'params': critic_params}, mix_batch.observations, mix_batch.actions)
+        q1_data, q2_data = critic.apply({'params': critic_params}, mix_batch.observations, mix_batch.actions)
+        q1_model, q2_model = critic.apply({'params': critic_params}, mix_batch.observations, mix_batch.actions)
         #critic_loss = (loss(target_q - q1, 0.5) + loss(target_q - q2, 0.5)).mean()
-        critic_loss = ((target_q - q1) ** 2 + (target_q - q2) ** 2).mean()
+        critic_loss1_data, critic_loss2_data = loss(target_q_data - q1_data, 0.5),  loss(target_q_data - q2_data, 0.5)
+        critic_loss1_model, critic_loss2_model = loss(target_q_model - q1_model, 0.1), loss(target_q_model - q2_model, 0.1)
+
+        critic_loss1 = jnp.concatenate([critic_loss1_data, critic_loss1_model], axis = 0).mean()
+        critic_loss2 = jnp.concatenate([critic_loss2_data, critic_loss2_model], axis = 0).mean()
+        critic_loss = critic_loss1 + critic_loss2
 
         obs_pi_value1, obs_pi_value2 = critic.apply({'params': critic_params}, Robs, Ra)
         obs_pi_value1, obs_pi_value2 = obs_pi_value1 - log_prob_Ra, obs_pi_value2 - log_prob_Ra 
@@ -191,7 +201,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, #m
         q1_model, q2_model = critic.apply({'params': critic_params}, model_batch.observations, model_batch.actions)
 
         conservative_loss = -(q1_data + q2_data).mean() + (cat_q1 + cat_q2).mean()
-        critic_loss = critic_loss + conservative_loss * 5.0
+        critic_loss = critic_loss + conservative_loss * cql_weight
         return critic_loss, {
             'critic_loss': critic_loss,
             'q1_data': q1_data.mean(), 'q1_model': q1_model.mean(),

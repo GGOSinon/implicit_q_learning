@@ -29,7 +29,7 @@ flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
-flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
+#flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
 flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
@@ -105,7 +105,7 @@ def main(_):
                     dynamics=FLAGS.dynamics,
                     env_name=FLAGS.env_name,
                     cql_weight=FLAGS.cql_weight,
-                    sac_alpha=FLAGS.sac_alpha,
+                    #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
     if FLAGS.dynamics == 'torch':
