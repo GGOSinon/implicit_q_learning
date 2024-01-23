@@ -130,7 +130,7 @@ class Learner(object):
                                             log_std_scale=1e-3,
                                             log_std_min=-5.0,
                                             dropout_rate=dropout_rate,
-                                            state_dependent_std=False,
+                                            state_dependent_std=True,
                                             tanh_squash_distribution=True)
 
         if opt_decay_schedule == "cosine":

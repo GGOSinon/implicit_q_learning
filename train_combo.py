@@ -120,7 +120,7 @@ def main(_):
         raw_restored = orbax_checkpointer.restore(file_dir)
         agent.model = agent.model.replace(params = raw_restored['model'])
 
-    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=1250000)
+    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=5*FLAGS.rollout_length*FLAGS.rollout_batch_size)
 
     wandb.login(key=FLAGS.wandb_key)
     run = wandb.init(
