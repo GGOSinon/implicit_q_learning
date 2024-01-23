@@ -6,6 +6,7 @@ def get_config():
 
     lr = 3e-4
     config.actor_lr = lr
+    config.alpha_lr = lr
     config.value_lr = lr
     config.critic_lr = lr
 

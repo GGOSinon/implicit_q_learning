@@ -31,10 +31,10 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 
 @jax.jit
 def _update_jit(
-        rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, #model: Model,
-        target_critic: Model, data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float, cql_weight: float, target_entropy: float,
-    ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, InfoDict]:
+        rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, cql_beta: Model, 
+        data_batch: Batch, model_batch: Batch, discount: float, tau: float,
+        expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float,
+    ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
 
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
@@ -50,12 +50,12 @@ def _update_jit(
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
     #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
-    new_critic, critic_info = update_q(key3, critic, target_critic, actor, #model,
-                                       data_batch, model_batch, discount, cql_weight)
+    new_critic, new_cql_beta, critic_info = update_q(key3, critic, target_critic, actor, cql_beta, #model,
+                                                     data_batch, model_batch, discount, cql_weight, target_beta)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
-    return rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, {
+    return rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, {
         **critic_info,
         **value_info,
         **actor_info,
@@ -86,6 +86,7 @@ class Learner(object):
                  num_elites: int = 5,
                  model_hidden_dims: Sequence[int] = (256, 256, 256),
                  cql_weight: float = None,
+                 target_beta: float = None,
                  #sac_alpha: float = 0.2,
                  **kwargs):
         """
@@ -101,6 +102,7 @@ class Learner(object):
         self.temperature = temperature
         self.cql_weight = cql_weight
         self.target_entropy = -action_dim
+        self.target_beta = target_beta
         #self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
@@ -167,6 +169,14 @@ class Learner(object):
         target_critic = Model.create(
             critic_def, inputs=[critic_key, observations, actions])
 
+        if self.target_beta is None:
+            self.cql_beta = None
+        else:
+            beta_def = policy.SACalpha()
+            self.cql_beta = Model.create(beta_def,
+                                         inputs=[alpha_key],
+                                         tx=optax.adam(learning_rate=alpha_lr))
+
         self.actor = actor
         self.alpha = alpha
         self.critic = critic
@@ -219,9 +229,9 @@ class Learner(object):
         
 
     def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
-        new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, info = _update_jit(
-            self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic,
-            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy)
+        new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, info = _update_jit(
+            self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.cql_beta,
+            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta)
 
         self.rng = new_rng
         self.actor = new_actor
@@ -229,5 +239,6 @@ class Learner(object):
         self.critic = new_critic
         self.value = new_value
         self.target_critic = new_target_critic
+        self.cql_beta = new_cql_beta
 
         return info
