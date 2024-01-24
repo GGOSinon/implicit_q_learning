@@ -31,7 +31,7 @@ def update_v(critic: Model, value: Model, batch: Batch,
     return new_value, info
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cql_beta: Model, #model: Model
-             data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float, target_beta: float) -> Tuple[Model, Model, InfoDict]:
+             data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float, target_beta: float, max_q_backup: bool) -> Tuple[Model, Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
@@ -56,13 +56,15 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cq
     Rrandom_action = jax.random.uniform(key4, Ra.shape, minval=-1., maxval=1.)
     log_prob_rand = np.log(0.5) * Ra.shape[-1]
 
-    if cql_beta is not None:
+    if max_q_backup:
         next_q1, next_q2 = target_critic(Rnext_obs, Rnext_a)
         next_q1, next_q2 = next_q1.reshape(N, num_repeat), next_q2.reshape(N, num_repeat)
         next_q = jnp.minimum(next_q1, next_q2)
         next_q = jnp.take_along_axis(next_q, jnp.argmax(next_q, axis=1)[:, None], axis=1).squeeze(1)
 
         target_q = mix_batch.rewards + discount * mix_batch.masks * next_q
+
+    if cql_beta is not None:
         log_beta = cql_beta(); beta = jnp.exp(log_beta)
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:

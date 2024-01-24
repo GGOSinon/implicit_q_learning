@@ -20,6 +20,7 @@ from offlinerlkit.dynamics.ensemble_dynamics import EnsembleDynamics
 from offlinerlkit.modules import EnsembleDynamicsModel
 from offlinerlkit.utils.scaler import StandardScaler
 from offlinerlkit.utils.termination_fns import get_termination_fn
+from functools import partial
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     new_target_params = jax.tree_map(
@@ -29,11 +30,12 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     return target_critic.replace(params=new_target_params)
 
 
-@jax.jit
+#@jax.jit
+@partial(jax.jit, static_argnames=['max_q_backup'])
 def _update_jit(
         rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, cql_beta: Model, 
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float,
+        expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float, max_q_backup: bool,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
 
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
@@ -51,7 +53,7 @@ def _update_jit(
 
     #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
     new_critic, new_cql_beta, critic_info = update_q(key3, critic, target_critic, actor, cql_beta, #model,
-                                                     data_batch, model_batch, discount, cql_weight, target_beta)
+                                                     data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
@@ -87,6 +89,7 @@ class Learner(object):
                  model_hidden_dims: Sequence[int] = (256, 256, 256),
                  cql_weight: float = None,
                  target_beta: float = None,
+                 max_q_backup: bool = False,
                  #sac_alpha: float = 0.2,
                  **kwargs):
         """
@@ -103,6 +106,7 @@ class Learner(object):
         self.cql_weight = cql_weight
         self.target_entropy = -action_dim
         self.target_beta = target_beta
+        self.max_q_backup = max_q_backup
         #self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
@@ -231,7 +235,7 @@ class Learner(object):
     def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
         new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, info = _update_jit(
             self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.cql_beta,
-            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta)
+            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta, self.max_q_backup)
 
         self.rng = new_rng
         self.actor = new_actor
