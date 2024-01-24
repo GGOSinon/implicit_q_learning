@@ -107,7 +107,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cq
         conservative_loss = info['conservative_loss']
         def cql_beta_loss_fn(cql_beta_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
             log_beta = cql_beta.apply({'params': cql_beta_params}); beta = jnp.exp(log_beta)
-            cql_beta_loss = -beta * conservative_loss
+            cql_beta_loss = -beta * (conservative_loss - target_beta)
             return cql_beta_loss, {
                 'cql_beta_loss': cql_beta_loss,
                 'beta': beta,
