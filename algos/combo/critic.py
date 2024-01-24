@@ -58,8 +58,10 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cq
 
     if cql_beta is not None:
         next_q1, next_q2 = target_critic(Rnext_obs, Rnext_a)
-        next_q1, next_q2 = next_q1.reshape(N, num_repeat).max(axis=1), next_q1.reshape(N, num_repeat).max(axis=1)
+        next_q1, next_q2 = next_q1.reshape(N, num_repeat), next_q2.reshape(N, num_repeat)
         next_q = jnp.minimum(next_q1, next_q2)
+        next_q = jnp.take_along_axis(next_q, jnp.argmax(next_q, axis=1)[:, None], axis=1).squeeze(1)
+
         target_q = mix_batch.rewards + discount * mix_batch.masks * next_q
         log_beta = cql_beta(); beta = jnp.exp(log_beta)
 
@@ -92,7 +94,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cq
         if cql_beta is None:
             critic_loss = critic_loss + conservative_loss * cql_weight
         else:
-            critic_loss = critic_loss + conservative_loss * cql_weight * beta
+            critic_loss = critic_loss + (conservative_loss - target_beta) * cql_weight * beta
         return critic_loss, {
             'critic_loss': critic_loss, 'conservative_loss': conservative_loss,
             'q1_data': q1_data.mean(), 'q1_model': q1_model.mean(),
@@ -107,7 +109,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cq
         conservative_loss = info['conservative_loss']
         def cql_beta_loss_fn(cql_beta_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
             log_beta = cql_beta.apply({'params': cql_beta_params}); beta = jnp.exp(log_beta)
-            cql_beta_loss = -beta * (conservative_loss - target_beta)
+            cql_beta_loss = -beta * cql_weight * (conservative_loss - target_beta)
             return cql_beta_loss, {
                 'cql_beta_loss': cql_beta_loss,
                 'beta': beta,
