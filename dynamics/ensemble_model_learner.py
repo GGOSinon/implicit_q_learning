@@ -81,6 +81,60 @@ def _update_jit(
 
     return rng, new_model, info
 
+def softplus(x):
+    return jnp.logaddexp(x, 0)
+
+def soft_clamp(x, _min, _max):
+    x = _max - softplus(_max - x)
+    x = _min + softplus(x - _min) 
+    return x
+
+class EnsembleLinear(nn.Module):
+    input_dim: int
+    output_dim: int
+    num_ensemble: int
+
+    def setup(self):
+        self.weight = self.param('kernel', nn.initializers.glorot_normal(), (self.num_ensemble, self.input_dim, self.output_dim))
+        self.bias = self.param('bias', nn.initializers.glorot_normal(), (self.num_ensemble, 1, self.output_dim))
+
+    def __call__(self, x: jnp.ndarray):
+        x = jnp.einsum('nbi,nij->nbj', x, self.weight)
+        x = x + self.bias
+        return x
+
+class EnsembleDynamicsModel(nn.Module):
+    model: Model
+    scaler: Tuple[jnp.ndarray, jnp.ndarray]
+    elites: jnp.ndarray
+
+    def __call__(self,
+                 key: PRNGKey,
+                 observations: jnp.ndarray,
+                 actions: jnp.ndarray,
+                 training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+
+        z = jnp.concatenate([observations, actions], axis=1)
+        z = (z - self.scaler[0]) / self.scaler[1]
+        observations, actions = z[:, :observations.shape[1]], z[:, observations.shape[1]:]
+        mean, logvar = self.model(observations, actions)
+        std = np.sqrt(np.exp(logvar))
+
+        ensemble_samples = (mean + jnp.random.normal(key, mean.shape) * std)
+
+        # choose one model from ensemble
+        num_models, batch_size, _ = ensemble_samples.shape
+        model_idxs = jnp.random.choice(elites, batch_size)
+        samples = jnp.take_along_axis(ensemble_samples, model_idxs, axis=0)
+        
+        next_obs = samples[:, :-1]
+        reward = samples[:, -1]
+        terminal = self.terminal_fn(observations, actions, next_obs)
+        info = {}
+        info["raw_reward"] = reward
+
+        return next_obs, reward, terminal, info
+
 class EnsembleWorldModel(nn.Module):
     num_models: int
     num_elites: int
@@ -90,32 +144,28 @@ class EnsembleWorldModel(nn.Module):
     dropout_rate: Optional[float] = None
 
     def setup(self):
-        self.models = [WorldModel(self.hidden_dims, self.obs_dim, self.action_dim, self.dropout_rate) for _ in range(self.num_models)]
-        self.elites = jnp.ndarray()
+        hidden_dims = (self.obs_dim+self.action_dim,) + self.hidden_dims
+        self.layers = [EnsembleLinear(hidden_dims[i-1], hidden_dims[i], self.num_models) for i in range(1, len(hidden_dims))]
+        self.last_layer = EnsembleLinear(self.hidden_dims[-1], 2 * (self.obs_dim + 1), self.num_models)
+        self.min_logvar = self.param('min_logvar', jax.nn.initializers.constant(-10), (self.obs_dim+1,))
+        self.max_logvar = self.param('max_logvar', jax.nn.initializers.constant(0.5), (self.obs_dim+1,))
 
     def __call__(self,
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
-                 indexs: Sequence[int] = None,
-                 training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+                 training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
        
-        if indexs is None:
-            indexs = list(range(self.num_models))
-        #inp = jnp.concatenate([observations, actions], axis = 1)
-        mu_hats, logvar_hats, r_hats, mask_hats = [], [], [], []
-        for idx in indexs:
-            model = self.models[idx]
-            sN_hat, r_hat, mask_hat = model(observations, actions, training=training); mu, logvar = sN_hat
-            mu_hats.append(mu)
-            logvar_hats.append(logvar)
-            r_hats.append(r_hat)
-            mask_hats.append(mask_hat)
-        mu_hats = jnp.stack(mu_hats, axis=1)
-        logvar_hats = jnp.stack(logvar_hats, axis=1)
-        r_hats = jnp.stack(r_hats, axis=1)
-        mask_hats = jnp.stack(mask_hats, axis=1)
+        z = jnp.concatenate([observations, actions], axis=1)
+        z = z[None, :, :].repeat(self.num_models, axis=0)
+        for layer in self.layers:
+            z = layer(z); z = nn.swish(z)
+        z = self.last_layer(z)
+        #mean, logvar, reward = jnp.split(z, [self.obs_dim, 2*self.obs_dim], axis=1)
+        mean, logvar = z[:, :, :self.obs_dim+1], z[:, :, self.obs_dim+1:]
+        logvar = soft_clamp(logvar, self.min_logvar, self.max_logvar)
 
-        return (mu_hats, logvar_hats), r_hats, mask_hats
+        mean[:, :, :-1] += observations[None, :, :]
+        return mean, logvar
 
     def set_elites(self, metrics):
         pairs = [(metric, index) for metric, index in zip(metrics, range(len(metrics)))]
