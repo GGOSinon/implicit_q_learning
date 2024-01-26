@@ -5,8 +5,8 @@ def get_config():
     config = ml_collections.ConfigDict()
 
     lr = 3e-4
-    config.actor_lr = 3e-5
-    config.alpha_lr = 3e-5
+    config.actor_lr = lr
+    config.alpha_lr = lr
     config.value_lr = lr
     config.critic_lr = lr
 
