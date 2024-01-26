@@ -27,3 +27,19 @@ def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model,
     new_actor, info = actor.apply_gradient(actor_loss_fn)
 
     return new_actor, info
+
+def update_alpha(key: PRNGKey, actor: Model, sac_alpha: Model,
+        batch: Batch, target_entropy: float) -> Tuple[Model, InfoDict]:
+
+    dist = actor(batch.observations); a = dist.sample(seed=key)
+    log_probs = dist.log_prob(a) + target_entropy
+
+    def alpha_loss_fn(alpha_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
+        log_alpha = sac_alpha.apply({'params': alpha_params})
+        alpha_loss = -(log_alpha * log_probs).mean()
+
+        return alpha_loss, {'alpha_loss': alpha_loss, 'alpha': jnp.exp(log_alpha)}
+
+    new_alpha, info = sac_alpha.apply_gradient(alpha_loss_fn)
+
+    return new_alpha, info

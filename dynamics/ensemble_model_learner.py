@@ -1,6 +1,6 @@
 """Implementations of algorithms for continuous control."""
 
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Callable
 
 from tqdm import tqdm
 import jax
@@ -103,10 +103,11 @@ class EnsembleLinear(nn.Module):
         x = x + self.bias
         return x
 
-class EnsembleDynamicsModel(nn.Module):
-    model: Model
+class EnsembleDynamicModel(nn.Module):
+    model: nn.Module
     scaler: Tuple[jnp.ndarray, jnp.ndarray]
     elites: jnp.ndarray
+    terminal_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
 
     def __call__(self,
                  key: PRNGKey,
@@ -116,19 +117,21 @@ class EnsembleDynamicsModel(nn.Module):
 
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
-        observations, actions = z[:, :observations.shape[1]], z[:, observations.shape[1]:]
-        mean, logvar = self.model(observations, actions)
-        std = np.sqrt(np.exp(logvar))
+        #observations, actions = z[:, :observations.shape[1]], z[:, observations.shape[1]:]
+        mean, logvar = self.model(z)
+        mean = jnp.concatenate([mean[:, :, :-1] + observations[None, :, :], mean[:, :, -1:]], axis=2)
+        std = jnp.sqrt(jnp.exp(logvar))
 
-        ensemble_samples = (mean + jnp.random.normal(key, mean.shape) * std)
+        ensemble_samples = (mean + jax.random.normal(key, mean.shape) * std)
 
         # choose one model from ensemble
         num_models, batch_size, _ = ensemble_samples.shape
-        model_idxs = jnp.random.choice(elites, batch_size)
-        samples = jnp.take_along_axis(ensemble_samples, model_idxs, axis=0)
+
+        model_idxs = jax.random.choice(key, self.elites, (1, batch_size, 1))
+        samples = jnp.take_along_axis(ensemble_samples, model_idxs, axis=0)[0]
         
         next_obs = samples[:, :-1]
-        reward = samples[:, -1]
+        reward = samples[:, -1:]
         terminal = self.terminal_fn(observations, actions, next_obs)
         info = {}
         info["raw_reward"] = reward
@@ -151,11 +154,11 @@ class EnsembleWorldModel(nn.Module):
         self.max_logvar = self.param('max_logvar', jax.nn.initializers.constant(0.5), (self.obs_dim+1,))
 
     def __call__(self,
-                 observations: jnp.ndarray,
-                 actions: jnp.ndarray,
+                 z: jnp.ndarray,
+                 #actions: jnp.ndarray,
                  training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
        
-        z = jnp.concatenate([observations, actions], axis=1)
+        #z = jnp.concatenate([observations, actions], axis=1)
         z = z[None, :, :].repeat(self.num_models, axis=0)
         for layer in self.layers:
             z = layer(z); z = nn.swish(z)
@@ -164,7 +167,6 @@ class EnsembleWorldModel(nn.Module):
         mean, logvar = z[:, :, :self.obs_dim+1], z[:, :, self.obs_dim+1:]
         logvar = soft_clamp(logvar, self.min_logvar, self.max_logvar)
 
-        mean[:, :, :-1] += observations[None, :, :]
         return mean, logvar
 
     def set_elites(self, metrics):
