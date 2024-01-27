@@ -10,12 +10,12 @@ def get_config():
     config.value_lr = lr
     config.critic_lr = lr
 
-    config.hidden_dims = (256, 256)
+    config.hidden_dims = (256, 256, 256, 256, 256)
 
     config.discount = 0.99
 
     config.expectile = 0.9  # The actual tau for expectiles.
-    config.temperature = 10.0
+    config.temperature = 1.0
     config.dropout_rate = None
 
     config.tau = 0.005  # For soft target updates.

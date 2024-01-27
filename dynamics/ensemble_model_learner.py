@@ -106,6 +106,7 @@ class EnsembleLinear(nn.Module):
 class EnsembleDynamicModel(nn.Module):
     model: nn.Module
     scaler: Tuple[jnp.ndarray, jnp.ndarray]
+    reward_scaler: Tuple[float, float]
     elites: jnp.ndarray
     terminal_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
 
@@ -131,8 +132,8 @@ class EnsembleDynamicModel(nn.Module):
         samples = jnp.take_along_axis(ensemble_samples, model_idxs, axis=0)[0]
         
         next_obs = samples[:, :-1]
-        reward = samples[:, -1:]
-        terminal = self.terminal_fn(observations, actions, next_obs)
+        reward = samples[:, -1] * self.reward_scaler[0] + self.reward_scaler[1]
+        terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
         info = {}
         info["raw_reward"] = reward
 

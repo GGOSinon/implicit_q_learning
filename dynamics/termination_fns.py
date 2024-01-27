@@ -48,9 +48,14 @@ def termination_fn_antangle(obs, act, next_obs):
     done = done[:,None]
     return done
 
-def termination_fn_ant(obs, act, next_obs):
+def termination_fn_antmaze(obs, act, next_obs):
     assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
 
+    done = np.array([False]).repeat(len(obs))
+    done = done[:,None]
+    return done
+
+def termination_fn_ant(obs, act, next_obs):
     x = next_obs[:, 0]
     not_done = 	np.isfinite(next_obs).all(axis=-1) \
                 * (x >= 0.2) \
@@ -129,6 +134,8 @@ def get_termination_fn(task):
         return termination_fn_hopper
     elif 'antangle' in task:
         return termination_fn_antangle
+    elif 'antmaze' in task:
+        return termination_fn_antmaze
     elif 'ant' in task:
         return termination_fn_ant
     elif 'walker2d' in task:
