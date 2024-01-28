@@ -12,9 +12,9 @@ import torch
 
 import policy
 import value_net
-from algos.myalgo.actor import update_actor, update_alpha
+from algos.myalgo_mopo.actor import update_actor, update_alpha
 from common import Batch, InfoDict, Model, PRNGKey
-from algos.myalgo.critic import update_q, update_v
+from algos.myalgo_mopo.critic import update_q, update_v
 
 from dynamics.termination_fns import get_termination_fn
 from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step, EnsembleDynamicModel
@@ -37,21 +37,28 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 @partial(jax.jit, static_argnames=['max_q_backup'])
 def _update_jit(
         rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, cql_beta: Model, model: Model,
-        batch: Batch, discount: float, tau: float,
+        data_batch: Batch, model_batch: Batch, discount: float, tau: float,
         expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float, max_q_backup: float,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
 
+    mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
+                      actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
+                      rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
+                      masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
+                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
+
+   
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
 
-    new_value, value_info = update_v(target_critic, value, batch, expectile)
+    new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
     key, key2, key3, rng = jax.random.split(rng, 4)
     new_actor, actor_info = update_actor(key, actor, target_critic, new_value, model,
-                                         batch, discount, temperature, alpha)
-    new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, batch, target_entropy)
+                                         mix_batch, discount, temperature, alpha)
+    new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
     #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
     new_critic, new_cql_beta, critic_info = update_q(key3, critic, target_critic, new_value, actor, cql_beta, model,
-                                                     batch, discount, cql_weight, target_beta, max_q_backup)
+                                                     data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
@@ -152,7 +159,7 @@ class Learner(object):
                                             log_std_scale=1e-3,
                                             log_std_min=-5.0,
                                             dropout_rate=dropout_rate,
-                                            state_dependent_std=False,
+                                            state_dependent_std=True,
                                             tanh_squash_distribution=True)
 
         if opt_decay_schedule == "cosine":
@@ -246,10 +253,10 @@ class Learner(object):
         return {'obss': obss, 'actions': actions, 'rewards': rewards, 'masks': masks, 'next_obss': next_obss}
         
 
-    def update(self, batch: Batch) -> InfoDict:
+    def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
         new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, info = _update_jit(
             self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.cql_beta, self.model,
-            batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta, self.max_q_backup)
+            data_batch, model_batch, self.discount, self.tau, self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta, self.max_q_backup)
 
         self.rng = new_rng
         self.actor = new_actor

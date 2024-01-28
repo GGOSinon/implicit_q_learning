@@ -7,18 +7,15 @@ import tqdm
 from absl import app, flags
 from ml_collections import config_flags
 from tensorboardX import SummaryWriter
+import jax
+import jax.numpy as jnp
 
 import wandb
 import wrappers
 import orbax.checkpoint
 from dataset_utils import D4RLDataset, split_into_trajectories, ReplayBuffer
 from evaluation import evaluate
-from algos.myalgo.learner import Learner
-import torch
-import numpy as np
-import jax
-import pprint
-import jax.numpy as jnp
+from algos.myalgo_mopo.learner import Learner
 
 FLAGS = flags.FLAGS
 
@@ -36,12 +33,13 @@ flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
 #flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
+flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
-flags.DEFINE_boolean('max_q_backup', False, 'Max q backup')
+flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
 config_flags.DEFINE_config_file(
     'config',
     'default.py',
@@ -65,10 +63,8 @@ def normalize(dataset):
 
     trajs.sort(key=compute_returns)
 
-    #dataset.rewards /= compute_returns(trajs[-1]) - compute_returns(trajs[0])
-    #dataset.rewards *= 1000.0
     scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
-    dataset.rewards = dataset.rewards * scale
+    dataset.rewards *= scale
     return scale, 0.
 
 
@@ -89,13 +85,12 @@ def make_env_and_dataset(env_name,
         #dataset.rewards -= 1.0
         dataset.rewards = dataset.rewards * 10 - 5.
         reward_scale, reward_bias = 10., -5.
-        dataset.dones_float = np.zeros_like(dataset.dones_float)
-        dataset.masks = np.ones_like(dataset.masks)
         # See https://github.com/aviralkumar2907/CQL/blob/master/d4rl/examples/cql_antmaze_new.py#L22
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
     elif ('halfcheetah' in FLAGS.env_name or 'walker2d' in FLAGS.env_name
           or 'hopper' in FLAGS.env_name):
         reward_scale, reward_bias = normalize(dataset)
+        #normalize(dataset)
 
     return env, dataset, (reward_scale, reward_bias)
 
@@ -121,6 +116,7 @@ def main(_):
                     target_beta=FLAGS.target_beta,
                     max_q_backup=FLAGS.max_q_backup,
                     reward_scaler=reward_scaler,
+                    #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
     if FLAGS.dynamics == 'torch':
@@ -135,6 +131,8 @@ def main(_):
         raw_restored = orbax_checkpointer.restore(file_dir)
         agent.model = agent.model.replace(params = raw_restored['model'])
 
+    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=5*FLAGS.rollout_length*FLAGS.rollout_batch_size)
+
     wandb.login(key=FLAGS.wandb_key)
     run = wandb.init(
 	# Set the project where this run will be logged
@@ -147,14 +145,24 @@ def main(_):
 	},
     )
 
+    model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
+    data_batch_size = FLAGS.batch_size - model_batch_size
+
     key = jax.random.PRNGKey(FLAGS.seed)
     eval_returns = []
     for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),
                        smoothing=0.1,
                        disable=not FLAGS.tqdm):
 
-        batch = dataset.sample(FLAGS.batch_size)
-        update_info = agent.update(batch)
+        if (i - 1) % FLAGS.rollout_freq == 0:
+            key, rng = jax.random.split(key)
+            data_batch = dataset.sample(FLAGS.rollout_batch_size)
+            rollout = agent.rollout(rng, data_batch.observations, FLAGS.rollout_length)
+            rollout_dataset.insert_batch(rollout['obss'], rollout['actions'], rollout['rewards'], rollout['masks'], 1 - rollout['masks'], rollout['next_obss'])
+
+        data_batch = dataset.sample(data_batch_size)
+        model_batch = rollout_dataset.sample(model_batch_size)
+        update_info = agent.update(data_batch, model_batch)
 
         if i % FLAGS.log_interval == 0:
             for k, v in update_info.items():
