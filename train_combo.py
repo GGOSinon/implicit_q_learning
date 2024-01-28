@@ -37,6 +37,7 @@ flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
+flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
 config_flags.DEFINE_config_file(
     'config',
     'default.py',
@@ -84,7 +85,8 @@ def make_env_and_dataset(env_name,
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
     elif ('halfcheetah' in FLAGS.env_name or 'walker2d' in FLAGS.env_name
           or 'hopper' in FLAGS.env_name):
-        normalize(dataset)
+        pass
+        #normalize(dataset)
 
     return env, dataset
 
@@ -108,6 +110,7 @@ def main(_):
                     env_name=FLAGS.env_name,
                     cql_weight=FLAGS.cql_weight,
                     target_beta=FLAGS.target_beta,
+                    max_q_backup=FLAGS.max_q_backup
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
