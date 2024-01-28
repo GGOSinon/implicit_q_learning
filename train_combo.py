@@ -110,7 +110,7 @@ def main(_):
                     env_name=FLAGS.env_name,
                     cql_weight=FLAGS.cql_weight,
                     target_beta=FLAGS.target_beta,
-                    max_q_backup=FLAGS.max_q_backup
+                    max_q_backup=FLAGS.max_q_backup,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
