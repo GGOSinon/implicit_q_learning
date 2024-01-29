@@ -32,7 +32,7 @@ def update_v(critic: Model, value: Model, batch: Batch,
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, actor: Model, cql_beta: Model, model: Model,
              data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float, target_beta: float, max_q_backup: bool,
-             lamb: float = 0.95, H: int = 1) -> Tuple[Model, Model, InfoDict]:
+             lamb: float, H: int) -> Tuple[Model, Model, InfoDict]:
 
     batch = data_batch
 
@@ -125,8 +125,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         cat_q2 = jnp.concatenate([obs_pi_value2, next_obs_pi_value2, random_value2], axis=1)
         cat_q1, cat_q2 = jax.scipy.special.logsumexp(cat_q1, axis=1), jax.scipy.special.logsumexp(cat_q2, axis=1)
 
-        conservative_loss = -(q1 + q2).mean() + (cat_q1 + cat_q2).mean()
-        conservative_loss = 0.
+        conservative_loss = -(q1_data + q2_data).mean() + (cat_q1 + cat_q2).mean()
+        #conservative_loss = 0.
 
         if cql_beta is None:
             critic_loss = critic_loss + conservative_loss * cql_weight
@@ -134,8 +134,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
             critic_loss = critic_loss + (conservative_loss - target_beta) * cql_weight * beta
         return critic_loss, {
             'critic_loss': critic_loss, 'conservative_loss': conservative_loss,
-            'q1_data': q1_data.mean(), 'q1_rollout': q1_rollout.mean(),
-            'q2_data': q2_data.mean(), 'q2_rollout': q2_rollout.mean(),
+            'q1_data': q1_data.mean(), 'q1_rollout': q1_rollout.mean(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
+            'q2_data': q2_data.mean(), 'q2_rollout': q2_rollout.mean(), 'q2_adv': q2_rollout.mean() - q2_data.mean(),
             'reward_data': batch.rewards.mean(), 'reward_data_max': batch.rewards.max(),
             'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),
         }

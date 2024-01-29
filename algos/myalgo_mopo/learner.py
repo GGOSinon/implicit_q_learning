@@ -34,11 +34,11 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     return target_critic.replace(params=new_target_params)
 
 
-@partial(jax.jit, static_argnames=['max_q_backup', 'rollout_length'])
+@partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length'])
 def _update_jit(
         rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, cql_beta: Model, model: Model,
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float, max_q_backup: bool, lamb: float, rollout_length: int,
+        expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float, max_q_backup: bool, lamb: float, horizon_length: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
 
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
@@ -56,12 +56,12 @@ def _update_jit(
     #                                     mix_batch, discount, temperature, alpha)
 
     new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
-                                             mix_batch, discount, temperature, alpha, lamb, rollout_length)
+                                             mix_batch, discount, temperature, alpha, lamb, horizon_length)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
     #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
     new_critic, new_cql_beta, critic_info = update_q(key3, critic, target_critic, new_value, actor, cql_beta, model,
-                                                     data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, rollout_length)
+                                                     data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, horizon_length)
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
@@ -99,7 +99,7 @@ class Learner(object):
                  target_beta: float = None,
                  max_q_backup: bool = None,
                  lamb: float = 0.95,
-                 rollout_length: int = None,
+                 horizon_length: int = None,
                  reward_scaler: Tuple[float, float] = None,
                  #sac_alpha: float = 0.2,
                  **kwargs):
@@ -118,7 +118,7 @@ class Learner(object):
         self.target_entropy = -action_dim
         self.target_beta = target_beta
         self.max_q_backup = max_q_backup
-        self.rollout_length = rollout_length
+        self.horizon_length = horizon_length
         self.lamb = lamb
         #self.sac_alpha = sac_alpha
 
@@ -264,7 +264,7 @@ class Learner(object):
         new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, info = _update_jit(
             self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.cql_beta, self.model,
             data_batch, model_batch, self.discount, self.tau,
-            self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta, self.max_q_backup, self.lamb, self.rollout_length)
+            self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta, self.max_q_backup, self.lamb, self.horizon_length)
 
         self.rng = new_rng
         self.actor = new_actor

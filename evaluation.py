@@ -7,14 +7,14 @@ import copy
 import time
 from tqdm import tqdm
 
-def evaluate(agent: nn.Module, envs: List[gym.Env]) -> Dict[str, float]:
+def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv) -> Dict[str, float]:
     stats = {'return': [], 'length': []}
     
     num_episodes = envs.num_envs
     s = time.time()
     terms = np.zeros(num_episodes, dtype=np.int32)
     dones = np.zeros(num_episodes, dtype=np.bool)
-    observations, dones = envs.reset(), np.zeros(num_episodes, dtype=np.bool)
+    observations, dones = envs.reset(seed=seed), np.zeros(num_episodes, dtype=np.bool)
     step = 0
     while True:
         step += 1

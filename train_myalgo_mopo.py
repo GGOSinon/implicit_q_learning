@@ -37,6 +37,8 @@ flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
+flags.DEFINE_integer('rollout_retain', 5, 'Rollout retain')
+flags.DEFINE_integer('horizon_length', 5, 'Value estimation length.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
 flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
@@ -63,7 +65,8 @@ def normalize(dataset):
 
     trajs.sort(key=compute_returns)
 
-    scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
+    #scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
+    scale = 1.
     dataset.rewards *= scale
     return scale, 0.
 
@@ -116,7 +119,7 @@ def main(_):
                     target_beta=FLAGS.target_beta,
                     max_q_backup=FLAGS.max_q_backup,
                     reward_scaler=reward_scaler,
-                    rollout_length=FLAGS.rollout_length,
+                    horizon_length=FLAGS.horizon_length,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
@@ -132,7 +135,7 @@ def main(_):
         raw_restored = orbax_checkpointer.restore(file_dir)
         agent.model = agent.model.replace(params = raw_restored['model'])
 
-    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=5*FLAGS.rollout_length*FLAGS.rollout_batch_size)
+    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=FLAGS.rollout_retain*FLAGS.rollout_length*FLAGS.rollout_batch_size)
 
     wandb.login(key=FLAGS.wandb_key)
     run = wandb.init(
@@ -177,7 +180,7 @@ def main(_):
 
         if i % FLAGS.eval_interval == 0:
             #eval_stats = evaluate(agent, env, FLAGS.eval_episodes)
-            eval_stats = evaluate(agent, eval_envs)
+            eval_stats = evaluate(FLAGS.seed, agent, eval_envs)
 
             for k, v in eval_stats.items():
                 if k == 'return':
