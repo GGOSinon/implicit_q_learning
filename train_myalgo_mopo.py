@@ -116,6 +116,7 @@ def main(_):
                     target_beta=FLAGS.target_beta,
                     max_q_backup=FLAGS.max_q_backup,
                     reward_scaler=reward_scaler,
+                    rollout_length=FLAGS.rollout_length,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 

@@ -25,27 +25,28 @@ def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model:
     return new_actor, info
 
 def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
-        batch: Batch, discount: float, temperature: float, sac_alpha: float, lamb=0.95, H=5) -> Tuple[Model, InfoDict]:
+        batch: Batch, discount: float, temperature: float, sac_alpha: float, lamb: float, H: int) -> Tuple[Model, InfoDict]:
 
-    rng1, rng2, key = jax.random.split(key, 3)
+    v = value(batch.observations)
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
-        states, rewards, actions, masks, log_probs = [batch.observations], [], [], [], []
-        dist = actor.apply({'params': actor_params}, s, training=True, rngs={'dropout': key})
-        a = dist.sample(seed=rng1); log_prob = dist.log_prob(a)
+        dist = actor.apply({'params': actor_params}, batch.observations, training=True, rngs={'dropout': key})
+        a = dist.sample(seed=key); log_prob = dist.log_prob(a)
+        states, rewards, actions, masks, log_probs, dists = [batch.observations], [], [a], [], [log_prob], [dist]
+        keys = [key]
         for i in range(H):
-            s = states[-1]
-            s_next, rew, terminal, _ = model(rng2, s, a)
-            dist = actor.apply({'params': actor_params}, s_next, training=True, rngs={'dropout': key})
-            a = dist.sample(seed=rng1); log_prob = dist.log_prob(a)
+            s, a = states[-1], actions[-1]
+            rng1, rng2, rng3, key0 = jax.random.split(keys[-1], 4); keys.append(key0)
+            s_next, rew, terminal, _ = model(rng1, s, a)
+            dist = actor.apply({'params': actor_params}, s_next, training=True, rngs={'dropout': rng3})
+            a_next = dist.sample(seed=rng2); log_prob = dist.log_prob(a_next)
             states.append(s_next)
             actions.append(a_next)
             rewards.append(rew)
             masks.append(1 - terminal)
             log_probs.append(log_prob)
+            dists.append(dist)
 
-        dist = actor.apply({'params': actor_params}, states[-1], training=True, rngs={'dropout': key})
-        a = dist.sample(seed=key)
-        actions.append(a)
+        policy_std = [dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag for dist in dists]
 
         q_rollout = []
         q1, q2 = critic(states[-1], actions[-1])
@@ -57,10 +58,11 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, mo
 
         q_rollout = jnp.stack(q_rollout, axis=1) # [N, H] 
         log_probs = jnp.stack(log_probs, axis=1)
+        policy_std = jnp.stack(policy_std, axis=1)
         actor_loss = -q_rollout.sum(axis=1).mean() + sac_alpha * log_probs.sum(axis=1).mean()
         #jax.debug.print('{x}, {y}', x=actor_loss, y=log_probs.mean())
 
-        return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout}
+        return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
 
     new_actor, info = actor.apply_gradient(actor_loss_fn)
     return new_actor, info
@@ -75,7 +77,12 @@ def update_alpha(key: PRNGKey, actor: Model, sac_alpha: Model,
         log_alpha = sac_alpha.apply({'params': alpha_params})
         alpha_loss = -(log_alpha * log_probs).mean()
 
-        return alpha_loss, {'alpha_loss': alpha_loss, 'alpha': jnp.exp(log_alpha), 'policy_std': dist.distribution.scale.diag.mean(), 'log_probs': log_probs.mean()}
+        if hasattr(dist, 'scale'):
+            policy_std = dist.scale.diag
+        else:
+            policy_std = dist.distribution.scale.diag
+
+        return alpha_loss, {'alpha_loss': alpha_loss, 'alpha': jnp.exp(log_alpha), 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
 
     new_alpha, info = sac_alpha.apply_gradient(alpha_loss_fn)
 

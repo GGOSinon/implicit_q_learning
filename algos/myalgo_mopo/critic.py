@@ -32,13 +32,13 @@ def update_v(critic: Model, value: Model, batch: Batch,
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, actor: Model, cql_beta: Model, model: Model,
              data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float, target_beta: float, max_q_backup: bool,
-             lamb: float = 0.95, H: int = 5) -> Tuple[Model, Model, InfoDict]:
+             lamb: float = 0.95, H: int = 1) -> Tuple[Model, Model, InfoDict]:
 
     batch = data_batch
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
  
-    num_repeat = 10; N = model_batch.observations.shape[0]
+    num_repeat = 50; N = model_batch.observations.shape[0]
     Robs = model_batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
     Ra = model_batch.actions[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
     #Ra = actor(Robs).sample(seed=key1)
@@ -55,11 +55,11 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
 
     q1, q2 = target_critic(states[-1], actions[-1])
     target_q_rollout = []
-    gae_value = jnp.minimum(q1, q2)
+    value_estimate = jnp.minimum(q1, q2)
     for i in reversed(range(H)):
         q1, q2 = target_critic(states[i+1], actions[i+1])
-        gae_value = rewards[i] + discount * masks[i] * (lamb * gae_value + (1-lamb) * jnp.minimum(q1, q2))
-        target_q_rollout.append(gae_value)
+        value_estimate = rewards[i] + discount * masks[i] * (lamb * value_estimate + (1-lamb) * jnp.minimum(q1, q2))
+        target_q_rollout.append(value_estimate)
 
     target_q_rollout = jnp.concatenate(target_q_rollout, axis=0)
     states = jnp.concatenate(states[:-1], axis=0)
