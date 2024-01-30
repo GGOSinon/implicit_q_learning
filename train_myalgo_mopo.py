@@ -65,8 +65,8 @@ def normalize(dataset):
 
     trajs.sort(key=compute_returns)
 
-    #scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
-    scale = 1.
+    scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
+    #scale = 1.
     dataset.rewards *= scale
     return scale, 0.
 

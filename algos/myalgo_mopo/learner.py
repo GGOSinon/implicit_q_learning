@@ -12,7 +12,7 @@ import torch
 
 import policy
 import value_net
-from algos.myalgo_mopo.actor import update_actor, gae_update_actor, update_alpha
+from algos.myalgo_mopo.actor import update_actor, gae_update_actor, update_alpha, update_all
 from common import Batch, InfoDict, Model, PRNGKey
 from algos.myalgo_mopo.critic import update_q, update_v
 
@@ -40,28 +40,30 @@ def _update_jit(
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
         expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float, max_q_backup: bool, lamb: float, horizon_length: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
-
+    
+    log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
                       masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
 
-   
-    log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
-
     new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
     key, key2, key3, rng = jax.random.split(rng, 4)
-    #new_actor, actor_info = update_actor(key, actor, target_critic, new_value, model,
-    #                                     mix_batch, discount, temperature, alpha)
 
     new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
                                              mix_batch, discount, temperature, alpha, lamb, horizon_length)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
-    #new_critic, critic_info = update_q(key2, critic, new_value, model, actor, batch, discount, lamb=1.0, H=5)
-    new_critic, new_cql_beta, critic_info = update_q(key3, critic, target_critic, new_value, actor, cql_beta, model,
-                                                     data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, horizon_length)
+    new_cql_beta = None
+    new_critic, critic_info = update_q(key3, critic, target_critic, new_value, actor, cql_beta, model,
+                                       data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, horizon_length)
+    '''
+    new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
+        key, actor, critic, target_critic, model, sac_alpha, 
+        data_batch, model_batch, discount, target_entropy, lamb, horizon_length
+    )
+    '''
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 

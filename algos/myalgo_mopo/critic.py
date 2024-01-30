@@ -34,8 +34,6 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
              data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float, target_beta: float, max_q_backup: bool,
              lamb: float, H: int) -> Tuple[Model, Model, InfoDict]:
 
-    batch = data_batch
-
     key1, key2, key3, key4 = jax.random.split(key, 4)
  
     num_repeat = 50; N = model_batch.observations.shape[0]
@@ -60,6 +58,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         q1, q2 = target_critic(states[i+1], actions[i+1])
         value_estimate = rewards[i] + discount * masks[i] * (lamb * value_estimate + (1-lamb) * jnp.minimum(q1, q2))
         target_q_rollout.append(value_estimate)
+    target_q_rollout = list(reversed(target_q_rollout))
 
     target_q_rollout = jnp.concatenate(target_q_rollout, axis=0)
     states = jnp.concatenate(states[:-1], axis=0)
@@ -77,16 +76,6 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     #target_q = target_q_rollout
 
     ###### CQL ######
-
-    num_repeat = 10; N = batch.observations.shape[0]
-    Robs = batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
-    Rnext_obs = batch.next_observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
-
-    Ra_dist = actor(Robs); Rnext_a_dist = actor(Rnext_obs)
-    Ra = Ra_dist.sample(seed=key2); Rnext_a = Rnext_a_dist.sample(seed=key3)
-    log_prob_Ra = Ra_dist.log_prob(Ra); log_prob_Rnext_a = Rnext_a_dist.log_prob(Rnext_a)
-    Rrandom_action = jax.random.uniform(key4, Ra.shape, minval=-1., maxval=1.)
-    log_prob_rand = np.log(0.5) * Ra.shape[-1]
 
     if max_q_backup:
         next_q1, next_q2 = target_critic(Rnext_obs, Rnext_a)
@@ -107,53 +96,14 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         critic_loss_rollout = (loss(target_q_rollout - q1_rollout, 0.1) + loss(target_q_rollout - q2_rollout, 0.1)).mean()
 
         critic_loss = critic_loss_data + critic_loss_rollout
-        #critic_loss = ((target_q - q1) ** 2 + (target_q - q2) ** 2).mean()
-
-        obs_pi_value1, obs_pi_value2 = critic.apply({'params': critic_params}, Robs, Ra)
-        obs_pi_value1, obs_pi_value2 = obs_pi_value1 - log_prob_Ra, obs_pi_value2 - log_prob_Ra 
-        obs_pi_value1, obs_pi_value2 = obs_pi_value1.reshape((N, num_repeat)), obs_pi_value2.reshape((N, num_repeat))
-
-        next_obs_pi_value1, next_obs_pi_value2 = critic.apply({'params': critic_params}, Robs, Rnext_a)
-        next_obs_pi_value1, next_obs_pi_value2 = next_obs_pi_value1 - log_prob_Rnext_a, next_obs_pi_value2 - log_prob_Rnext_a 
-        next_obs_pi_value1, next_obs_pi_value2 = next_obs_pi_value1.reshape((N, num_repeat)), next_obs_pi_value2.reshape((N, num_repeat))
-
-        random_value1, random_value2 = critic.apply({'params': critic_params}, Robs, Rrandom_action)
-        random_value1, random_value2 = random_value1 - log_prob_rand, random_value2 - log_prob_rand
-        random_value1, random_value2 = random_value1.reshape((N, num_repeat)), random_value2.reshape((N, num_repeat))
-
-        cat_q1 = jnp.concatenate([obs_pi_value1, next_obs_pi_value1, random_value1], axis=1)
-        cat_q2 = jnp.concatenate([obs_pi_value2, next_obs_pi_value2, random_value2], axis=1)
-        cat_q1, cat_q2 = jax.scipy.special.logsumexp(cat_q1, axis=1), jax.scipy.special.logsumexp(cat_q2, axis=1)
-
-        conservative_loss = -(q1_data + q2_data).mean() + (cat_q1 + cat_q2).mean()
-        conservative_loss = 0.
-
-        if cql_beta is None:
-            critic_loss = critic_loss + conservative_loss * cql_weight
-        else:
-            critic_loss = critic_loss + (conservative_loss - target_beta) * cql_weight * beta
         return critic_loss, {
-            'critic_loss': critic_loss, 'conservative_loss': conservative_loss,
+            'critic_loss': critic_loss,
             'q1_data': q1_data.mean(), 'q1_rollout': q1_rollout.mean(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
             'q2_data': q2_data.mean(), 'q2_rollout': q2_rollout.mean(), 'q2_adv': q2_rollout.mean() - q2_data.mean(),
-            'reward_data': batch.rewards.mean(), 'reward_data_max': batch.rewards.max(),
+            'reward_data': data_batch.rewards.mean(), 'reward_data_max': data_batch.rewards.max(),
             'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),
         }
 
     new_critic, info = critic.apply_gradient(critic_loss_fn)
 
-    if cql_beta is None:
-        new_beta, beta_info = None, {}
-    else:
-        conservative_loss = info['conservative_loss']
-        def cql_beta_loss_fn(cql_beta_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
-            log_beta = cql_beta.apply({'params': cql_beta_params}); beta = jnp.exp(log_beta)
-            cql_beta_loss = -beta * cql_weight * (conservative_loss - target_beta)
-            return cql_beta_loss, {
-                'cql_beta_loss': cql_beta_loss,
-                'beta': beta,
-            }
-
-        new_beta, beta_info = cql_beta.apply_gradient(cql_beta_loss_fn)
-
-    return new_critic, new_beta, {**info, **beta_info}
+    return new_critic, {**info}
