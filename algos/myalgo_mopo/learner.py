@@ -241,12 +241,13 @@ class Learner(object):
     def rollout(self,
                 key: PRNGKey,
                 observations: np.ndarray,
-                rollout_length: int) -> np.ndarray:
+                rollout_length: int,
+                temperature: float=1.0,) -> np.ndarray:
         states, actions, rewards, masks = [observations], [], [], []
         
         for _ in range(rollout_length):
             key, rng = jax.random.split(key)
-            action = self.sample_actions(states[-1])
+            action = self.sample_actions(states[-1], temperature)
             next_obs, reward, mask = self.step(rng, states[-1], action)
             states.append(next_obs)
             actions.append(action)

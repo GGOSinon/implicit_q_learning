@@ -32,6 +32,7 @@ flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
+flags.DEFINE_float('temp_explore', 3.0, 'Temperature for exploration.')
 #flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
 flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
@@ -161,7 +162,7 @@ def main(_):
         if (i - 1) % FLAGS.rollout_freq == 0:
             key, rng = jax.random.split(key)
             data_batch = dataset.sample(FLAGS.rollout_batch_size)
-            rollout = agent.rollout(rng, data_batch.observations, FLAGS.rollout_length)
+            rollout = agent.rollout(rng, data_batch.observations, FLAGS.rollout_length, FLAGS.temp_explore)
             rollout_dataset.insert_batch(rollout['obss'], rollout['actions'], rollout['rewards'], rollout['masks'], 1 - rollout['masks'], rollout['next_obss'])
 
         data_batch = dataset.sample(data_batch_size)
