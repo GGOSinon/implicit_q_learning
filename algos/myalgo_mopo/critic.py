@@ -126,7 +126,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         cat_q1, cat_q2 = jax.scipy.special.logsumexp(cat_q1, axis=1), jax.scipy.special.logsumexp(cat_q2, axis=1)
 
         conservative_loss = -(q1_data + q2_data).mean() + (cat_q1 + cat_q2).mean()
-        #conservative_loss = 0.
+        conservative_loss = 0.
 
         if cql_beta is None:
             critic_loss = critic_loss + conservative_loss * cql_weight
