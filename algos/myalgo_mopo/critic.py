@@ -71,6 +71,9 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_q = jnp.minimum(next_q1, next_q2)
     target_q_data = data_batch.rewards + discount * data_batch.masks * next_q
 
+    #target_q_data = jnp.maximum(target_q_data, 0.)
+    #target_q_rollout = jnp.maximum(target_q_rollout, 0.)
+
     #rollout_ratio = (target_q_rollout[-1] > target_q_td).mean()
     #target_q = jnp.maximum(target_q_rollout, target_q_td)
     #target_q = target_q_rollout
@@ -98,10 +101,10 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         critic_loss = critic_loss_data + critic_loss_rollout
         return critic_loss, {
             'critic_loss': critic_loss,
-            'q1_data': q1_data.mean(), 'q1_rollout': q1_rollout.mean(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
-            'q2_data': q2_data.mean(), 'q2_rollout': q2_rollout.mean(), 'q2_adv': q2_rollout.mean() - q2_data.mean(),
-            'reward_data': data_batch.rewards.mean(), 'reward_data_max': data_batch.rewards.max(),
-            'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),
+            'q1_data': q1_data.mean(), 'q1_rollout': q1_rollout.mean(), 'q1_rollout_min': q1_rollout.min(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
+            'q2_data': q2_data.mean(), 'q2_rollout': q2_rollout.mean(), 'q1_rollout_min': q1_rollout.min(),  'q2_adv': q2_rollout.mean() - q2_data.mean(),
+            'reward_data': data_batch.rewards.mean(), 'reward_data_max': data_batch.rewards.max(), 'reward_data_min': data_batch.rewards.min(),
+            'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),'reward_min': jnp.concatenate(rewards, axis=0).max(),
         }
 
     new_critic, info = critic.apply_gradient(critic_loss_fn)

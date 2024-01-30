@@ -51,8 +51,10 @@ def _update_jit(
     new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
     key, key2, key3, rng = jax.random.split(rng, 4)
 
-    new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
-                                             mix_batch, discount, temperature, alpha, lamb, horizon_length)
+    #new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
+    #                                         mix_batch, discount, temperature, alpha, lamb, horizon_length)
+    new_actor, actor_info = update_actor(key, actor, target_critic, new_value, model,
+                                         mix_batch, discount, temperature, alpha)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
     new_cql_beta = None

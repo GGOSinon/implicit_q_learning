@@ -20,9 +20,9 @@ def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model:
         q = jnp.minimum(q1, q2)
 
         actor_loss = -q.mean() + sac_alpha * log_probs.mean()
-        #jax.debug.print('{x}, {y}', x=actor_loss, y=log_probs.mean())
 
-        return actor_loss, {'actor_loss': actor_loss, 'adv': q - v}
+        policy_std = dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag
+        return actor_loss, {'actor_loss': actor_loss, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
 
     new_actor, info = actor.apply_gradient(actor_loss_fn)
 
