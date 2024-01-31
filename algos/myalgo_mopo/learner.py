@@ -46,9 +46,10 @@ def _update_jit(
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
                       masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
-                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
+                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),
+                      returns_to_go=None,)
 
-    new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
+    new_value, value_info = update_v(target_critic, value, mix_batch, 0.7)
     key, key2, key3, rng = jax.random.split(rng, 4)
 
     #new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
@@ -59,7 +60,7 @@ def _update_jit(
 
     new_cql_beta = None
     new_critic, critic_info = update_q(key3, critic, target_critic, new_value, actor, cql_beta, model,
-                                       data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, horizon_length)
+                                       data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, horizon_length, expectile)
     '''
     new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
         key, actor, critic, target_critic, model, sac_alpha, 
@@ -91,7 +92,7 @@ class Learner(object):
                  hidden_dims: Sequence[int] = (256, 256),
                  discount: float = 0.99,
                  tau: float = 0.005,
-                 expectile: float = 0.8,
+                 expectile: float = 0.1,
                  temperature: float = 0.1,
                  dropout_rate: Optional[float] = None,
                  max_steps: Optional[int] = None,

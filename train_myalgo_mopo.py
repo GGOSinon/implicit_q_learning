@@ -33,6 +33,7 @@ flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
 flags.DEFINE_float('temp_explore', 1.0, 'Temperature for exploration.')
+flags.DEFINE_float('expectile', None, 'Expectile for Q estimation')
 #flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
 flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
@@ -69,11 +70,12 @@ def normalize(dataset):
     scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
     #scale = 1.
     dataset.rewards *= scale
+    dataset.returns_to_go *= scale
     return scale, 0.
 
 
 def make_env_and_dataset(env_name,
-                         seed) -> Tuple[gym.Env, D4RLDataset]:
+                         seed, discount) -> Tuple[gym.Env, D4RLDataset]:
     env = gym.make(env_name)
 
     env = wrappers.EpisodeMonitor(env)
@@ -83,7 +85,7 @@ def make_env_and_dataset(env_name,
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
 
-    dataset = D4RLDataset(env)
+    dataset = D4RLDataset(env, discount)
 
     if 'antmaze' in FLAGS.env_name:
         #dataset.rewards -= 1.0
@@ -104,12 +106,12 @@ def main(_):
                                                 str(FLAGS.seed)),
                                    write_to_disk=True)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
+    kwargs = dict(FLAGS.config)
 
-    env, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed)
+    env, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, kwargs['discount'])
    
     eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
-    kwargs = dict(FLAGS.config)
     agent = Learner(FLAGS.seed,
                     env.observation_space.sample()[np.newaxis],
                     env.action_space.sample()[np.newaxis],
@@ -121,6 +123,7 @@ def main(_):
                     max_q_backup=FLAGS.max_q_backup,
                     reward_scaler=reward_scaler,
                     horizon_length=FLAGS.horizon_length,
+                    expectile=FLAGS.expectile,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 

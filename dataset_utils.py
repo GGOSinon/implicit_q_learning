@@ -5,10 +5,7 @@ import d4rl
 import gym
 import numpy as np
 from tqdm import tqdm
-
-Batch = collections.namedtuple(
-    'Batch',
-    ['observations', 'actions', 'rewards', 'masks', 'next_observations'])
+from common import Batch
 
 
 def split_into_trajectories(observations, actions, rewards, masks, dones_float,
@@ -50,6 +47,7 @@ class Dataset(object):
     def __init__(self, observations: np.ndarray, actions: np.ndarray,
                  rewards: np.ndarray, masks: np.ndarray,
                  dones_float: np.ndarray, next_observations: np.ndarray,
+                 returns_to_go: np.ndarray,
                  size: int):
         self.observations = observations
         self.actions = actions
@@ -57,6 +55,7 @@ class Dataset(object):
         self.masks = masks
         self.dones_float = dones_float
         self.next_observations = next_observations
+        self.returns_to_go = returns_to_go
         self.size = size
 
     def sample(self, batch_size: int) -> Batch:
@@ -65,12 +64,14 @@ class Dataset(object):
                      actions=self.actions[indx],
                      rewards=self.rewards[indx],
                      masks=self.masks[indx],
-                     next_observations=self.next_observations[indx])
+                     next_observations=self.next_observations[indx],
+                     returns_to_go=self.returns_to_go[indx])
 
 
 class D4RLDataset(Dataset):
     def __init__(self,
                  env: gym.Env,
+                 discount: float,
                  clip_to_eps: bool = True,
                  eps: float = 1e-5):
         dataset = d4rl.qlearning_dataset(env)
@@ -91,13 +92,18 @@ class D4RLDataset(Dataset):
 
         dones_float[-1] = 1
 
+        returns_to_go = np.zeros_like(dataset['rewards'])
+        returns_to_go[-1] = dataset['rewards'][-1] 
+        for i in reversed(range(len(dones_float) - 1)):
+            returns_to_go[i] = dataset['rewards'][i] + returns_to_go[i+1] * discount * (1.0 - dataset['terminals'][i])
+
         super().__init__(dataset['observations'].astype(np.float32),
                          actions=dataset['actions'].astype(np.float32),
                          rewards=dataset['rewards'].astype(np.float32),
                          masks=1.0 - dataset['terminals'].astype(np.float32),
                          dones_float=dones_float.astype(np.float32),
-                         next_observations=dataset['next_observations'].astype(
-                             np.float32),
+                         next_observations=dataset['next_observations'].astype(np.float32),
+                         returns_to_go=returns_to_go.astype(np.float32),
                          size=len(dataset['observations']))
 
 
@@ -113,12 +119,14 @@ class ReplayBuffer(Dataset):
         dones_float = np.empty((capacity, ), dtype=np.float32)
         next_observations = np.empty((capacity, *observation_space.shape),
                                      dtype=observation_space.dtype)
+        returns_to_go = np.empty((capacity, ), dtype=np.float32)
         super().__init__(observations=observations,
                          actions=actions,
                          rewards=rewards,
                          masks=masks,
                          dones_float=dones_float,
                          next_observations=next_observations,
+                         returns_to_go=returns_to_go,
                          size=0)
 
         self.size = 0
@@ -149,14 +157,14 @@ class ReplayBuffer(Dataset):
         self.rewards[:num_samples] = dataset.rewards[indices]
         self.masks[:num_samples] = dataset.masks[indices]
         self.dones_float[:num_samples] = dataset.dones_float[indices]
-        self.next_observations[:num_samples] = dataset.next_observations[
-            indices]
+        self.next_observations[:num_samples] = dataset.next_observations[indices]
+        self.returns_to_go[:num_samples] = dataset.returns_to_go[indices]
 
         self.insert_index = num_samples
         self.size = num_samples
 
     def insert(self, observation: np.ndarray, action: np.ndarray,
-               reward: float, mask: float, done_float: float,
+               reward: float, mask: float, done_float: float, returns_to_go: float,
                next_observation: np.ndarray):
         self.observations[self.insert_index] = observation
         self.actions[self.insert_index] = action
@@ -164,13 +172,14 @@ class ReplayBuffer(Dataset):
         self.masks[self.insert_index] = mask
         self.dones_float[self.insert_index] = done_float
         self.next_observations[self.insert_index] = next_observation
+        self.returns_to_go[self.insert_index] = returns_to_go
 
         self.insert_index = (self.insert_index + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
     def insert_batch(self, observations: np.ndarray, actions: np.ndarray,
-               rewards: float, masks: float, dones_float: float,
-               next_observations: np.ndarray):
+                     rewards: np.ndarray, masks: np.ndarray, dones_float: np.ndarray,
+                     next_observations: np.ndarray):
         batch_size = observations.shape[0]
         if self.insert_index + batch_size > self.capacity:
             p = self.capacity - self.insert_index
@@ -183,6 +192,7 @@ class ReplayBuffer(Dataset):
         self.masks[self.insert_index:self.insert_index + batch_size] = masks
         self.dones_float[self.insert_index:self.insert_index + batch_size] = dones_float
         self.next_observations[self.insert_index:self.insert_index + batch_size] = next_observations
+        self.returns_to_go[self.insert_index:self.insert_index + batch_size] = None
 
         self.insert_index = (self.insert_index + batch_size) % self.capacity
         self.size = min(self.size + batch_size, self.capacity)

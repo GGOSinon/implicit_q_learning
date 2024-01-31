@@ -10,7 +10,7 @@ import optax
 
 Batch = collections.namedtuple(
     'Batch',
-    ['observations', 'actions', 'rewards', 'masks', 'next_observations'])
+    ['observations', 'actions', 'rewards', 'masks', 'next_observations', 'returns_to_go'])
 
 
 def default_init(scale: Optional[float] = jnp.sqrt(2)):

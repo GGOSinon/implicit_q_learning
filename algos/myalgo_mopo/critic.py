@@ -9,7 +9,8 @@ from common import Batch, InfoDict, Model, Params, PRNGKey
 
 def loss(diff, expectile=0.8):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
-    return weight * (diff**2) # / (2 * expectile * (1 - expectile))
+    return weight * (diff ** 2)
+    #return weight * jnp.minimum(jnp.abs(diff), (diff**2)) # / (2 * expectile * (1 - expectile))
 
 
 def update_v(critic: Model, value: Model, batch: Batch,
@@ -32,14 +33,14 @@ def update_v(critic: Model, value: Model, batch: Batch,
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, actor: Model, cql_beta: Model, model: Model,
              data_batch: Batch, model_batch: Batch, discount: float, cql_weight: float, target_beta: float, max_q_backup: bool,
-             lamb: float, H: int) -> Tuple[Model, Model, InfoDict]:
+             lamb: float, H: int, expectile: float) -> Tuple[Model, Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
  
     num_repeat = 50; N = model_batch.observations.shape[0]
     Robs = model_batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
-    Ra = model_batch.actions[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
-    #Ra = actor(Robs).sample(seed=key1)
+    #Ra = model_batch.actions[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
+    Ra = actor(Robs).sample(seed=key1)
     states, rewards, actions, masks = [Robs], [], [Ra], []
     for i in range(H):
         s, a = states[-1], actions[-1]
@@ -58,11 +59,16 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         q1, q2 = target_critic(states[i+1], actions[i+1])
         value_estimate = rewards[i] + discount * masks[i] * (lamb * value_estimate + (1-lamb) * jnp.minimum(q1, q2))
         target_q_rollout.append(value_estimate)
+
+    loss_weights = [jnp.ones_like(rewards[i])]
+    for i in range(H):
+        loss_weights.append(loss_weights[-1] * lamb * masks[i])
     target_q_rollout = list(reversed(target_q_rollout))
 
     target_q_rollout = jnp.concatenate(target_q_rollout, axis=0)
     states = jnp.concatenate(states[:-1], axis=0)
     actions = jnp.concatenate(actions[:-1], axis=0)
+    loss_weights = jnp.concatenate(loss_weights[:-1], axis=0)
 
     #target_q_rollout = target_q_rollout.reshape(N, num_repeat)
     #target_q_rollout = jnp.take_along_axis(target_q_rollout, jnp.argmin(target_q_rollout, axis=1)[:, None], axis=1).squeeze(1)
@@ -71,8 +77,10 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_q = jnp.minimum(next_q1, next_q2)
     target_q_data = data_batch.rewards + discount * data_batch.masks * next_q
 
-    #target_q_data = jnp.maximum(target_q_data, 0.)
-    #target_q_rollout = jnp.maximum(target_q_rollout, 0.)
+    target_q_data = jnp.maximum(target_q_data, 0.)
+    target_q_rollout = jnp.maximum(target_q_rollout, 0.)
+
+    #target_q_data = jnp.maximum(target_q_data, data_batch.returns_to_go)
 
     #rollout_ratio = (target_q_rollout[-1] > target_q_td).mean()
     #target_q = jnp.maximum(target_q_rollout, target_q_td)
@@ -93,16 +101,20 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1_data, q2_data = critic.apply({'params': critic_params}, data_batch.observations, data_batch.actions)
-        critic_loss_data = (loss(target_q_data - q1_data, 0.5) + loss(target_q_data - q2_data, 0.5)).mean()
+        critic_loss_data = loss(target_q_data - q1_data, 0.5) + loss(target_q_data - q2_data, 0.5)
+                           #(loss(data_batch.returns_to_go - q1_data, 1.) + loss(data_batch.returns_to_go - q2_data, 1.)).mean()
 
         q1_rollout, q2_rollout = critic.apply({'params': critic_params}, states, actions)
-        critic_loss_rollout = (loss(target_q_rollout - q1_rollout, 0.1) + loss(target_q_rollout - q2_rollout, 0.1)).mean()
+        critic_loss_rollout = loss(target_q_rollout - q1_rollout, expectile) + loss(target_q_rollout - q2_rollout, expectile)
+        critic_loss_rollout = (critic_loss_rollout * loss_weights).reshape(H, N, num_repeat).mean(axis=(0, 2))
 
-        critic_loss = critic_loss_data + critic_loss_rollout
+        critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0).mean()
         return critic_loss, {
-            'critic_loss': critic_loss,
-            'q1_data': q1_data.mean(), 'q1_rollout': q1_rollout.mean(), 'q1_rollout_min': q1_rollout.min(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
-            'q2_data': q2_data.mean(), 'q2_rollout': q2_rollout.mean(), 'q1_rollout_min': q1_rollout.min(),  'q2_adv': q2_rollout.mean() - q2_data.mean(),
+            'critic_loss': critic_loss, 'loss_weights': loss_weights.mean(), 'returns_to_go': data_batch.returns_to_go.mean(),
+            'q1_data': q1_data.mean(), 'q1_data_min': q1_data.min(), 'q1_data_max': q1_data.max(),
+            'q2_data': q2_data.mean(), 'q2_data_min': q2_data.min(), 'q2_data_max': q2_data.max(),
+            'q1_rollout': q1_rollout.mean(), 'q1_rollout_min': q1_rollout.min(), 'q1_rollout_max': q1_rollout.max(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
+            'q2_rollout': q2_rollout.mean(), 'q2_rollout_min': q2_rollout.min(), 'q2_rollout_max': q2_rollout.max(), 'q2_adv': q2_rollout.mean() - q2_data.mean(),
             'reward_data': data_batch.rewards.mean(), 'reward_data_max': data_batch.rewards.max(), 'reward_data_min': data_batch.rewards.min(),
             'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),'reward_min': jnp.concatenate(rewards, axis=0).max(),
         }
