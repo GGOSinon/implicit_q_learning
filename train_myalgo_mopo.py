@@ -27,6 +27,8 @@ flags.DEFINE_string('dynamics', 'torch', 'Dynamics model')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
+flags.DEFINE_integer('num_layers', 3, 'number of hidden layers')
+flags.DEFINE_integer('layer_size', 256, 'layer size')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
@@ -124,6 +126,7 @@ def main(_):
                     reward_scaler=reward_scaler,
                     horizon_length=FLAGS.horizon_length,
                     expectile=FLAGS.expectile,
+                    hidden_dims=tuple([FLAGS.layer_size for _ in range(FLAGS.num_layers)]),
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
