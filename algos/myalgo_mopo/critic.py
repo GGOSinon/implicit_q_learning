@@ -77,8 +77,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_q = jnp.minimum(next_q1, next_q2)
     target_q_data = data_batch.rewards + discount * data_batch.masks * next_q
 
-    target_q_data = jnp.maximum(target_q_data, 0.)
-    target_q_rollout = jnp.maximum(target_q_rollout, 0.)
+    #target_q_data = jnp.maximum(target_q_data, 0.)
+    #target_q_rollout = jnp.maximum(target_q_rollout, 0.)
 
     #target_q_data = jnp.maximum(target_q_data, data_batch.returns_to_go)
 
