@@ -99,13 +99,19 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     if cql_beta is not None:
         log_beta = cql_beta(); beta = jnp.exp(log_beta)
 
+    old_q1_data, old_q2_data = target_critic(data_batch.observations, data_batch.actions)
+    old_q1_rollout, old_q2_rollout = target_critic(states, actions)
+
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1_data, q2_data = critic.apply({'params': critic_params}, data_batch.observations, data_batch.actions)
-        critic_loss_data = loss(target_q_data - q1_data, 0.5) + loss(target_q_data - q2_data, 0.5)
+        critic_loss_data = loss(target_q_data - q1_data, 0.5) + loss(target_q_data - q2_data, 0.5)\
+                           + loss(old_q1_data - q1_data, 0.5) + loss(old_q2_data - q2_data, 0.5)
                            #(loss(data_batch.returns_to_go - q1_data, 1.) + loss(data_batch.returns_to_go - q2_data, 1.)).mean()
 
         q1_rollout, q2_rollout = critic.apply({'params': critic_params}, states, actions)
-        critic_loss_rollout = loss(target_q_rollout - q1_rollout, expectile) + loss(target_q_rollout - q2_rollout, expectile)
+        critic_loss_rollout = loss(target_q_rollout - q1_rollout, expectile) + loss(target_q_rollout - q2_rollout, expectile)\
+                              + loss(old_q1_rollout - q1_rollout, 0.5) + loss(old_q2_rollout - q2_rollout, 0.5)
+
         critic_loss_rollout = (critic_loss_rollout * loss_weights).reshape(H, N, num_repeat).mean(axis=(0, 2))
 
         critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0).mean()

@@ -176,32 +176,27 @@ class Learner(object):
 
         if opt_decay_schedule == "cosine":
             schedule_fn = optax.cosine_decay_schedule(-actor_lr, max_steps)
-            optimiser = optax.chain(optax.scale_by_adam(),
+            optimiser = optax.chain(optax.clip_by_global_norm(5.0),
+                                    optax.scale_by_adam(),
                                     optax.scale_by_schedule(schedule_fn))
         else:
-            optimiser = optax.adam(learning_rate=actor_lr)
+            optimiser = optax.chain(optax.clip_by_global_norm(5.0),
+                                    optax.adam(learning_rate=actor_lr))
 
-        actor = Model.create(actor_def,
-                             inputs=[actor_key, observations],
-                             tx=optimiser)
+        actor = Model.create(actor_def, inputs=[actor_key, observations], tx=optimiser)
 
-        alpha_def = policy.SACalpha()
-        alpha = Model.create(alpha_def,
-                             inputs=[alpha_key],
-                             tx=optax.adam(learning_rate=alpha_lr))
+        alpha_def = policy.SACalpha() 
+        alpha = Model.create(alpha_def, inputs=[alpha_key], tx=optax.adam(learning_rate=alpha_lr))
 
         critic_def = value_net.DoubleCritic(hidden_dims)
-        critic = Model.create(critic_def,
-                              inputs=[critic_key, observations, actions],
-                              tx=optax.adam(learning_rate=critic_lr))
+        critic_opt = optax.chain(optax.clip_by_global_norm(5.0), optax.adam(learning_rate=value_lr))
+        critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = critic_opt)
 
         value_def = value_net.ValueCritic(hidden_dims)
-        value = Model.create(value_def,
-                             inputs=[value_key, observations],
-                             tx=optax.adam(learning_rate=value_lr))
+        value_opt = optax.chain(optax.clip_by_global_norm(5.0), optax.adam(learning_rate=value_lr))
+        value = Model.create(value_def, inputs=[value_key, observations], tx=value_opt)
 
-        target_critic = Model.create(
-            critic_def, inputs=[critic_key, observations, actions])
+        target_critic = Model.create(critic_def, inputs=[critic_key, observations, actions])
 
         if self.target_beta is None:
             self.cql_beta = None
