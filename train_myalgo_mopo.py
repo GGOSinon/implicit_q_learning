@@ -1,6 +1,7 @@
 import os
 from typing import Tuple
 
+import cv2
 import gym
 import numpy as np
 import tqdm
@@ -9,6 +10,7 @@ from ml_collections import config_flags
 from tensorboardX import SummaryWriter
 import jax
 import jax.numpy as jnp
+import subprocess
 
 import wandb
 import wrappers
@@ -130,6 +132,9 @@ def main(_):
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
+    video_path = os.path.join(FLAGS.save_dir, 'videos', FLAGS.env_name)
+    os.makedirs(video_path, exist_ok=True)
+
     if FLAGS.dynamics == 'torch':
         pass
 
@@ -187,7 +192,13 @@ def main(_):
 
         if i % FLAGS.eval_interval == 0:
             #eval_stats = evaluate(agent, env, FLAGS.eval_episodes)
-            eval_stats = evaluate(FLAGS.seed, agent, eval_envs)
+            eval_stats, images = evaluate(FLAGS.seed, agent, eval_envs, env)
+            video = cv2.VideoWriter(os.path.join(video_path, 'tmp.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), 50, (images.shape[2], images.shape[1]), True)
+            for j in range(images.shape[0]):
+                video.write(images[j])
+            video.release()
+            subprocess.call(['ffmpeg', '-y', '-i', os.path.join(video_path, "tmp.mp4"), os.path.join(video_path, f"output_{i}.mp4")],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
             for k, v in eval_stats.items():
                 if k == 'return':

@@ -95,7 +95,7 @@ class D4RLDataset(Dataset):
         returns_to_go = np.zeros_like(dataset['rewards'])
         returns_to_go[-1] = dataset['rewards'][-1] 
         for i in reversed(range(len(dones_float) - 1)):
-            returns_to_go[i] = dataset['rewards'][i] + returns_to_go[i+1] * discount * (1.0 - dataset['terminals'][i])
+            returns_to_go[i] = dataset['rewards'][i] + returns_to_go[i+1] * discount * (1.0 - dones_float[i])
 
         super().__init__(dataset['observations'].astype(np.float32),
                          actions=dataset['actions'].astype(np.float32),

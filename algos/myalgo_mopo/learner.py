@@ -36,9 +36,9 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 
 @partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length'])
 def _update_jit(
-        rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, cql_beta: Model, model: Model,
+        rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, model: Model,
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float, cql_weight: float, target_entropy: float, target_beta: float, max_q_backup: bool, lamb: float, horizon_length: int,
+        expectile: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
     
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
@@ -58,9 +58,8 @@ def _update_jit(
                                          mix_batch, discount, temperature, alpha)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
-    new_cql_beta = None
-    new_critic, critic_info = update_q(key3, critic, target_critic, new_value, actor, cql_beta, model,
-                                       data_batch, model_batch, discount, cql_weight, target_beta, max_q_backup, lamb, horizon_length, expectile)
+    new_critic, critic_info = update_q(key3, critic, target_critic, new_value, actor, model,
+                                       data_batch, model_batch, discount, lamb, horizon_length, expectile)
     '''
     new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
         key, actor, critic, target_critic, model, sac_alpha, 
@@ -70,7 +69,7 @@ def _update_jit(
 
     new_target_critic = target_update(new_critic, target_critic, tau)
 
-    return rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, {
+    return rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, {
         **critic_info,
         **value_info,
         **actor_info,
@@ -100,9 +99,6 @@ class Learner(object):
                  num_models: int = 7,
                  num_elites: int = 5,
                  model_hidden_dims: Sequence[int] = (256, 256, 256),
-                 cql_weight: float = None,
-                 target_beta: float = None,
-                 max_q_backup: bool = None,
                  lamb: float = 0.95,
                  horizon_length: int = None,
                  reward_scaler: Tuple[float, float] = None,
@@ -119,10 +115,7 @@ class Learner(object):
         self.tau = tau
         self.discount = discount
         self.temperature = temperature
-        self.cql_weight = cql_weight
         self.target_entropy = -action_dim
-        self.target_beta = target_beta
-        self.max_q_backup = max_q_backup
         self.horizon_length = horizon_length
         self.lamb = lamb
         #self.sac_alpha = sac_alpha
@@ -176,12 +169,10 @@ class Learner(object):
 
         if opt_decay_schedule == "cosine":
             schedule_fn = optax.cosine_decay_schedule(-actor_lr, max_steps)
-            optimiser = optax.chain(optax.clip_by_global_norm(5.0),
-                                    optax.scale_by_adam(),
+            optimiser = optax.chain(optax.scale_by_adam(),
                                     optax.scale_by_schedule(schedule_fn))
         else:
-            optimiser = optax.chain(optax.clip_by_global_norm(5.0),
-                                    optax.adam(learning_rate=actor_lr))
+            optimiser = optax.adam(learning_rate=actor_lr)
 
         actor = Model.create(actor_def, inputs=[actor_key, observations], tx=optimiser)
 
@@ -189,22 +180,14 @@ class Learner(object):
         alpha = Model.create(alpha_def, inputs=[alpha_key], tx=optax.adam(learning_rate=alpha_lr))
 
         critic_def = value_net.DoubleCritic(hidden_dims)
-        critic_opt = optax.chain(optax.clip_by_global_norm(5.0), optax.adam(learning_rate=value_lr))
+        critic_opt = optax.adam(learning_rate=value_lr)
         critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = critic_opt)
 
         value_def = value_net.ValueCritic(hidden_dims)
-        value_opt = optax.chain(optax.clip_by_global_norm(5.0), optax.adam(learning_rate=value_lr))
+        value_opt = optax.adam(learning_rate=value_lr)
         value = Model.create(value_def, inputs=[value_key, observations], tx=value_opt)
 
         target_critic = Model.create(critic_def, inputs=[critic_key, observations, actions])
-
-        if self.target_beta is None:
-            self.cql_beta = None
-        else:
-            beta_def = policy.SACalpha()
-            self.cql_beta = Model.create(beta_def,
-                                         inputs=[alpha_key],
-                                         tx=optax.adam(learning_rate=alpha_lr))
 
         self.actor = actor
         self.alpha = alpha
@@ -262,10 +245,10 @@ class Learner(object):
         
 
     def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
-        new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, new_cql_beta, info = _update_jit(
-            self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.cql_beta, self.model,
+        new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, info = _update_jit(
+            self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.model,
             data_batch, model_batch, self.discount, self.tau,
-            self.expectile, self.temperature, self.cql_weight, self.target_entropy, self.target_beta, self.max_q_backup, self.lamb, self.horizon_length)
+            self.expectile, self.temperature, self.target_entropy, self.lamb, self.horizon_length)
 
         self.rng = new_rng
         self.actor = new_actor
@@ -273,6 +256,5 @@ class Learner(object):
         self.critic = new_critic
         self.value = new_value
         self.target_critic = new_target_critic
-        self.cql_beta = new_cql_beta
 
         return info

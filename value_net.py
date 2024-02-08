@@ -39,4 +39,4 @@ class DoubleCritic(nn.Module):
                          activations=self.activations)(observations, actions)
         critic2 = Critic(self.hidden_dims,
                          activations=self.activations)(observations, actions)
-        return critic1, critic1
+        return critic1, critic2
