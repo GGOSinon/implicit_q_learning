@@ -23,6 +23,7 @@ class SACalpha(nn.Module):
 
 
 class NormalTanhPolicy(nn.Module):
+    scaler: Tuple[jnp.ndarray, jnp.ndarray]
     hidden_dims: Sequence[int]
     action_dim: int
     state_dependent_std: bool = True
@@ -37,6 +38,7 @@ class NormalTanhPolicy(nn.Module):
                  observations: jnp.ndarray,
                  temperature: float = 1.0,
                  training: bool = False) -> tfd.Distribution:
+        observations = (observations - self.scaler[0]) / self.scaler[1]
         outputs = MLP(self.hidden_dims,
                       activate_final=True,
                       dropout_rate=self.dropout_rate)(observations,
@@ -69,7 +71,7 @@ class NormalTanhPolicy(nn.Module):
             return base_dist
 
 
-@functools.partial(jax.jit, static_argnames=('actor_def', 'distribution'))
+#@functools.partial(jax.jit, static_argnames=('actor_def', 'distribution'))
 def _sample_actions(rng: PRNGKey,
                     actor_def: nn.Module,
                     actor_params: Params,

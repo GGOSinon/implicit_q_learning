@@ -12,7 +12,7 @@ import torch
 
 import policy
 import value_net
-from algos.myalgo_mopo.actor import update_actor, gae_update_actor, update_alpha, update_all
+from algos.myalgo_mopo.actor import reinforce_update_actor, awr_update_actor, update_actor, gae_update_actor, update_alpha, update_all
 from common import Batch, InfoDict, Model, PRNGKey
 from algos.myalgo_mopo.critic import update_q, update_v
 
@@ -49,13 +49,17 @@ def _update_jit(
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),
                       returns_to_go=None,)
 
-    new_value, value_info = update_v(target_critic, value, mix_batch, 0.7)
+    new_value, value_info = update_v(rng, target_critic, value, actor, data_batch, model_batch, 0.5)
     key, key2, key3, rng = jax.random.split(rng, 4)
 
     #new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
     #                                         mix_batch, discount, temperature, alpha, lamb, horizon_length)
     new_actor, actor_info = update_actor(key, actor, target_critic, new_value, model,
                                          mix_batch, discount, temperature, alpha)
+    #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
+    #                                         model_batch, discount, temperature, alpha)
+    #new_actor, actor_info = reinforce_update_actor(key, actor, target_critic, new_value, model,
+    #                                         model_batch, discount, temperature, alpha)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
     new_critic, critic_info = update_q(key3, critic, target_critic, new_value, actor, model,
@@ -135,15 +139,16 @@ class Learner(object):
         if self.dynamics == 'torch':
             mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
             std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
-            scaler = (mu, std)
+            scaler = (jnp.array(mu), jnp.array(std))
+            obs_scaler = (jnp.array(mu[:, :obs_dim]), jnp.array(std[:, :obs_dim]))
 
             ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
             ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
             elites = ckpt['elites']
 
-            termination_fn = get_termination_fn(task=env_name)
+            self.termination_fn = get_termination_fn(task=env_name)
             model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
-            model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, termination_fn)
+            model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
             model = Model.create(model_def, inputs=[model_key, model_key, observations, actions], tx=None)
 
             ckpt_jax = {}
@@ -159,7 +164,8 @@ class Learner(object):
             ckpt_jaxs = {'model': ckpt_jax}
             model = model.replace(params = ckpt_jaxs)
 
-        actor_def = policy.NormalTanhPolicy(hidden_dims,
+        actor_def = policy.NormalTanhPolicy(obs_scaler,
+                                            hidden_dims,
                                             action_dim,
                                             log_std_scale=1e-3,
                                             log_std_min=-5.0,
@@ -179,11 +185,11 @@ class Learner(object):
         alpha_def = policy.SACalpha() 
         alpha = Model.create(alpha_def, inputs=[alpha_key], tx=optax.adam(learning_rate=alpha_lr))
 
-        critic_def = value_net.DoubleCritic(hidden_dims)
+        critic_def = value_net.DoubleCritic(scaler, hidden_dims)
         critic_opt = optax.adam(learning_rate=value_lr)
         critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = critic_opt)
 
-        value_def = value_net.ValueCritic(hidden_dims)
+        value_def = value_net.ValueCritic(obs_scaler, hidden_dims)
         value_opt = optax.adam(learning_rate=value_lr)
         value = Model.create(value_def, inputs=[value_key, observations], tx=value_opt)
 

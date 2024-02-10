@@ -12,6 +12,10 @@ Batch = collections.namedtuple(
     'Batch',
     ['observations', 'actions', 'rewards', 'masks', 'next_observations', 'returns_to_go'])
 
+def expectile_loss(target, pred, expectile):
+    weight = jnp.where(target > pred, expectile, (1 - expectile))
+    diff = target - pred
+    return weight * (diff ** 2)
 
 def default_init(scale: Optional[float] = jnp.sqrt(2)):
     return nn.initializers.orthogonal(scale)

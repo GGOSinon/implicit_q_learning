@@ -5,27 +5,35 @@ import jax
 
 import numpy as np
 from common import Batch, InfoDict, Model, Params, PRNGKey
+from common import expectile_loss as loss
 
-
-def loss(diff, expectile=0.8):
-    weight = jnp.where(diff > 0, expectile, (1 - expectile))
-    return weight * (diff ** 2)
-    #return weight * jnp.minimum(jnp.abs(diff), (diff**2)) # / (2 * expectile * (1 - expectile))
-
-
-def update_v(critic: Model, value: Model, batch: Batch,
+def update_v(key: PRNGKey, critic: Model, value: Model, actor: Model, data_batch: Batch, model_batch: Batch,
              expectile: float) -> Tuple[Model, InfoDict]:
-    actions = batch.actions
-    q1, q2 = critic(batch.observations, actions)
-    q = jnp.minimum(q1, q2)
+
+    q1_rollout, q2_rollout = critic(model_batch.observations, model_batch.actions)
+    q_model = jnp.minimum(q1_rollout, q2_rollout)
+
+    q1_data, q2_data = critic(data_batch.observations, data_batch.actions)
+    q_data = jnp.minimum(q1_data, q2_data)
+
+    q1_data_pi, q2_data_pi = critic(data_batch.observations, actor(data_batch.observations).sample(seed=key))
+    q_data_pi = jnp.minimum(q1_data_pi, q2_data_pi)
 
     def value_loss_fn(value_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
-        v = value.apply({'params': value_params}, batch.observations)
-        value_loss = loss(q - v, expectile).mean()
+        v_model = value.apply({'params': value_params}, model_batch.observations)
+        value_loss_model = loss(q_model, v_model, 0.5)
+
+        v_data = value.apply({'params': value_params}, data_batch.observations)
+        value_loss_data = loss(q_data, v_data, 0.7)
+
+        #value_loss = jnp.concatenate([value_loss_model, value_loss_data], axis=0).mean()
+        value_loss = value_loss_model.mean()
+
         return value_loss, {
             'value_loss': value_loss,
-            'v': v.mean(),
-            'adv': (q-v).mean(),
+            'v_model': v_model.mean(),
+            'v_data': v_data.mean(),
+            'argmax_adv': (q_data_pi - q_data).mean(),
         }
 
     new_value, info = value.apply_gradient(value_loss_fn)
@@ -54,7 +62,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         masks.append(1 - terminal)
 
     #q1, q2 = target_critic(states[-1], actions[-1]); next_value = jnp.minimum(q1, q2)
-    next_value = value(states[i+1])
+    next_value = value(states[-1])
     target_q_rollout = []
     value_estimate = next_value
     for i in reversed(range(H)):
@@ -94,11 +102,11 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1_data, q2_data = critic.apply({'params': critic_params}, data_batch.observations, data_batch.actions)
-        critic_loss_data = loss(target_q_data - q1_data, 0.5) + loss(target_q_data - q2_data, 0.5)
+        critic_loss_data = loss(target_q_data, q1_data, 0.5) + loss(target_q_data, q2_data, 0.5)
                            #(loss(data_batch.returns_to_go - q1_data, 1.) + loss(data_batch.returns_to_go - q2_data, 1.)).mean()
 
         q1_rollout, q2_rollout = critic.apply({'params': critic_params}, states, actions)
-        critic_loss_rollout = loss(target_q_rollout - q1_rollout, expectile) + loss(target_q_rollout - q2_rollout, expectile)
+        critic_loss_rollout = loss(target_q_rollout, q1_rollout, expectile) + loss(target_q_rollout, q2_rollout, expectile)
 
         critic_loss_rollout = (critic_loss_rollout * loss_weights).reshape(H, N, num_repeat).mean(axis=(0, 2))
 

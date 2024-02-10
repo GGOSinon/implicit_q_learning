@@ -4,10 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from common import Batch, InfoDict, Model, Params, PRNGKey
-
-def loss(diff, expectile=0.8):
-    weight = jnp.where(diff > 0, expectile, (1 - expectile))
-    return weight * (diff**2)
+from common import expectile_loss as loss
 
 def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
         batch: Batch, discount: float, temperature: float, sac_alpha: float) -> Tuple[Model, InfoDict]:
@@ -20,6 +17,49 @@ def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model:
         q = jnp.minimum(q1, q2)
 
         actor_loss = -q.mean() + sac_alpha * log_probs.mean()
+
+        policy_std = dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag
+        return actor_loss, {'actor_loss': actor_loss, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
+
+    new_actor, info = actor.apply_gradient(actor_loss_fn)
+
+    return new_actor, info
+
+def reinforce_update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
+        batch: Batch, discount: float, temperature: float, sac_alpha: float) -> Tuple[Model, InfoDict]:
+
+    v = value(batch.observations)
+    def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
+        dist = actor.apply({'params': actor_params}, batch.observations, training=True, rngs={'dropout': key})
+        a = dist.sample(seed=key); log_probs = dist.log_prob(a)
+        q1, q2 = critic(batch.observations, a)
+        q = jnp.minimum(q1, q2)
+        adv = jax.lax.stop_gradient(q - v)
+
+        actor_loss = -(adv * log_probs).mean() + sac_alpha * log_probs.mean()
+
+        policy_std = dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag
+        return actor_loss, {'actor_loss': actor_loss, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
+
+    new_actor, info = actor.apply_gradient(actor_loss_fn)
+
+    return new_actor, info
+
+def awr_update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
+        batch: Batch, discount: float, temperature: float, sac_alpha: float) -> Tuple[Model, InfoDict]:
+
+    v = value(batch.observations)
+
+    q1, q2 = critic(batch.observations, batch.actions)
+    q = jnp.minimum(q1, q2)
+    exp_a = jnp.exp((q - v) * temperature)
+    exp_a = jnp.minimum(exp_a, 100.0)
+
+    def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
+        dist = actor.apply({'params': actor_params}, batch.observations, training=True, rngs={'dropout': key})
+        log_probs = dist.log_prob(batch.actions)
+
+        actor_loss = -(exp_a * log_probs).mean() #+ sac_alpha * log_probs.mean()
 
         policy_std = dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag
         return actor_loss, {'actor_loss': actor_loss, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
@@ -143,7 +183,7 @@ def update_all(key: PRNGKey, actor: Model, critic: Model, target_critic: Model, 
 
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1_data, q2_data = critic.apply({'params': critic_params}, data_batch.observations, data_batch.actions)
-        critic_loss_data = (loss(target_q_data - q1_data, 0.5) + loss(target_q_data - q2_data, 0.5))
+        critic_loss_data = (loss(target_q_data, q1_data, 0.5) + loss(target_q_data, q2_data, 0.5))
 
         q1_rollout, q2_rollout = critic.apply({'params': critic_params}, states, actions)
         critic_loss_rollout = (loss(target_q_rollout - q1_rollout, 0.1) + loss(target_q_rollout - q2_rollout, 0.1))

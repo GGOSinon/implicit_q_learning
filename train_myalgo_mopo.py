@@ -16,7 +16,7 @@ import wandb
 import wrappers
 import orbax.checkpoint
 from dataset_utils import D4RLDataset, split_into_trajectories, ReplayBuffer
-from evaluation import evaluate
+from evaluation import evaluate, take_video
 from algos.myalgo_mopo.learner import Learner
 
 FLAGS = flags.FLAGS
@@ -33,6 +33,7 @@ flags.DEFINE_integer('num_layers', 3, 'number of hidden layers')
 flags.DEFINE_integer('layer_size', 256, 'layer size')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
+flags.DEFINE_integer('video_interval', 50000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
@@ -190,9 +191,9 @@ def main(_):
                     run.log({f'training/{k}': wandb.Histogram(v)}, step=i)
             summary_writer.flush()
 
-        if i % FLAGS.eval_interval == 0:
-            #eval_stats = evaluate(agent, env, FLAGS.eval_episodes)
-            eval_stats, images = evaluate(FLAGS.seed, agent, eval_envs, env)
+        if i % FLAGS.video_interval == 0:
+            images, q_values = take_video(FLAGS.seed, agent, env, agent.termination_fn)
+            np.save(os.path.join(video_path, f"q_values_{i}.npz"), q_values)
             video = cv2.VideoWriter(os.path.join(video_path, 'tmp.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), 50, (images.shape[2], images.shape[1]), True)
             for j in range(images.shape[0]):
                 video.write(images[j])
@@ -200,6 +201,9 @@ def main(_):
             subprocess.call(['ffmpeg', '-y', '-i', os.path.join(video_path, "tmp.mp4"), os.path.join(video_path, f"output_{i}.mp4")],
                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
+        if i % FLAGS.eval_interval == 0:
+            eval_stats = evaluate(FLAGS.seed, agent, eval_envs)
+            
             for k, v in eval_stats.items():
                 if k == 'return':
                     v = env.get_normalized_score(v)

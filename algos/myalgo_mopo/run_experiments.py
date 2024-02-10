@@ -21,14 +21,14 @@ start_command = 'mkdir ~/.mujoco &&' \
 		'pip install flax && '\
 		'pip install optax==0.1.4 && '\
 		'apt-get -qq update && '\
-		'apt-get -qq install -y libosmesa6-dev libgl1-mesa-glx libglfw3 libgl1-mesa-dev libglew-dev patchelf && '\
+		'apt-get -qq install -y libosmesa6-dev libgl1-mesa-glx libglfw3 libgl1-mesa-dev libglew-dev patchelf ffmpeg && '\
                 'pip install opencv-python &&'\
                 'git clone https://github.com/GGOSinon/OfflineRL-Kit.git && '\
                 'git clone https://github.com/GGOSinon/implicit_q_learning.git && '\
 		'pip install -e OfflineRL-Kit && '\
 		'pip install typing_extensions==4.9.0 && '\
 		'cd implicit_q_learning && '\
-		'PYTHONPATH="." python train_myalgo_mopo.py --config $config --env_name $env_name --seed $seed --cql_weight 0.0 --rollout_length $rollout_length --model_batch_ratio $model_batch_ratio --horizon_length 1 --expectile 0.3 --num_layers 3 --layer_size 256 --wandb_key $WANDB_KEY'
+		'PYTHONPATH="." python train_myalgo_mopo.py --config $config --env_name $env_name --seed $seed --rollout_length $rollout_length --model_batch_ratio $model_batch_ratio --horizon_length 5 --expectile 0.1 --num_layers 3 --layer_size 256 --wandb_key $WANDB_KEY'
 
 rollout_lengths={'halfcheetah-random-v2': 5,
                  'hopper-random-v2': 5,

@@ -7,18 +7,24 @@ import copy
 import time
 from tqdm import tqdm
 
-def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv, render_env: gym.Env) -> Dict[str, float]:
+def take_video(seed: int, agent: nn.Module, render_env: gym.Env, termination_fn) -> Dict[str, float]:
     observation = render_env.reset()
-    images = []
+    images, q_values = [], []
     while True:
         image = render_env.render(mode='rgb_array')
         images.append(image)
         actions = agent.sample_actions(observation, temperature=0.0)
         action = np.array(actions)[0]
         observation, reward, done, info = render_env.step(action)
-        if done: break
+        q1, q2 = agent.critic(observation[None], action[None])
+        q_values.append(np.minimum(q1, q2)[0])
+        if done:
+            break
     images = np.stack(images, axis=0)
+    q_values = np.stack(q_values, axis=0)
+    return images, q_values
 
+def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv) -> Dict[str, float]:
     stats = {'return': [], 'length': []}
     
     num_episodes = envs.num_envs
@@ -44,7 +50,7 @@ def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv, render_env
             tmp.append(np.sum(v[:terms[i], i]))
         stats[k] = np.mean(tmp)
 
-    return stats, images
+    return stats
 
 def _evaluate(agent: nn.Module, env: gym.Env,
              num_episodes: int) -> Dict[str, float]:
