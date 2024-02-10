@@ -12,7 +12,7 @@ def get_config():
 
     #config.hidden_dims = (256, 256, 256)
 
-    config.discount = 0.99
+    config.discount = 0.999
 
     #config.expectile = 0.3  # The actual tau for expectiles.
     config.temperature = 3.0
