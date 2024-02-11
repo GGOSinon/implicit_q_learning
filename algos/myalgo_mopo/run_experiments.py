@@ -28,7 +28,7 @@ start_command = 'mkdir ~/.mujoco &&' \
 		'pip install -e OfflineRL-Kit && '\
 		'pip install typing_extensions==4.9.0 && '\
 		'cd implicit_q_learning && '\
-		'PYTHONPATH="." python train_myalgo_mopo.py --config $config --env_name $env_name --seed $seed --rollout_length $rollout_length --model_batch_ratio $model_batch_ratio --horizon_length 5 --expectile 0.1 --num_layers 3 --layer_size 256 --wandb_key $WANDB_KEY'
+		'PYTHONPATH="." python train_myalgo_mopo.py --config $config --env_name $env_name --seed $seed --rollout_length $rollout_length --model_batch_ratio $model_batch_ratio --horizon_length 5 --expectile 0.1 --num_layers 3 --layer_size 256 --wandb_key $WANDB_KEY --video_interval 1000000'
 
 rollout_lengths={'halfcheetah-random-v2': 5,
                  'hopper-random-v2': 5,

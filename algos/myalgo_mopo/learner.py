@@ -38,10 +38,11 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 def _update_jit(
         rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, model: Model,
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int,
+        expectile: float, expectile_policy: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
     
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
+    #alpha = 0.1
     mix_batch = Batch(observations=jnp.concatenate([data_batch.observations, model_batch.observations], axis=0),
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
@@ -49,7 +50,7 @@ def _update_jit(
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),
                       returns_to_go=None,)
 
-    new_value, value_info = update_v(rng, target_critic, value, actor, data_batch, model_batch, 0.5)
+    new_value, value_info = update_v(rng, target_critic, value, actor, data_batch, model_batch, expectile_policy)
     key, key2, key3, rng = jax.random.split(rng, 4)
 
     #new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
@@ -96,6 +97,7 @@ class Learner(object):
                  discount: float = 0.99,
                  tau: float = 0.005,
                  expectile: float = 0.1,
+                 expectile_policy: float = 0.1,
                  temperature: float = 0.1,
                  dropout_rate: Optional[float] = None,
                  max_steps: Optional[int] = None,
@@ -116,6 +118,7 @@ class Learner(object):
         action_dim = actions.shape[-1]
 
         self.expectile = expectile
+        self.expectile_policy = expectile_policy
         self.tau = tau
         self.discount = discount
         self.temperature = temperature
@@ -206,9 +209,7 @@ class Learner(object):
     def sample_actions(self,
                        observations: np.ndarray,
                        temperature: float = 1.0) -> jnp.ndarray:
-        rng, actions = policy.sample_actions(self.rng, self.actor.apply_fn,
-                                             self.actor.params, observations,
-                                             temperature)
+        rng, actions = policy.sample_actions(self.rng, self.actor, observations, temperature)
         self.rng = rng
 
         actions = np.asarray(actions)
@@ -254,7 +255,7 @@ class Learner(object):
         new_rng, new_actor, new_alpha, new_critic, new_value, new_target_critic, info = _update_jit(
             self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.model,
             data_batch, model_batch, self.discount, self.tau,
-            self.expectile, self.temperature, self.target_entropy, self.lamb, self.horizon_length)
+            self.expectile, self.expectile_policy, self.temperature, self.target_entropy, self.lamb, self.horizon_length)
 
         self.rng = new_rng
         self.actor = new_actor

@@ -35,10 +35,12 @@ flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('video_interval', 50000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
+flags.DEFINE_float('discount', 0.99, 'discount')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
 flags.DEFINE_float('temp_explore', 1.0, 'Temperature for exploration.')
 flags.DEFINE_float('expectile', None, 'Expectile for Q estimation')
+flags.DEFINE_float('expectile_policy', None, 'Expectile for V estimation')
 #flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
 flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
@@ -113,7 +115,7 @@ def main(_):
     os.makedirs(FLAGS.save_dir, exist_ok=True)
     kwargs = dict(FLAGS.config)
 
-    env, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, kwargs['discount'])
+    env, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, FLAGS.discount)
    
     eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
@@ -129,7 +131,9 @@ def main(_):
                     reward_scaler=reward_scaler,
                     horizon_length=FLAGS.horizon_length,
                     expectile=FLAGS.expectile,
+                    expectile_policy=FLAGS.expectile_policy,
                     hidden_dims=tuple([FLAGS.layer_size for _ in range(FLAGS.num_layers)]),
+                    discount=FLAGS.discount,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
@@ -159,6 +163,10 @@ def main(_):
 	config={
 	    "env_name": FLAGS.env_name,
 	    "seed": FLAGS.seed,
+            "expectile": FLAGS.expectile,
+            "expectile_policy": FLAGS.expectile_policy,
+            "rollout_length": FLAGS.rollout_length,
+            "horizon_length": FLAGS.horizon_length,
 	},
     )
 

@@ -21,7 +21,7 @@ def update_v(key: PRNGKey, critic: Model, value: Model, actor: Model, data_batch
 
     def value_loss_fn(value_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         v_model = value.apply({'params': value_params}, model_batch.observations)
-        value_loss_model = loss(q_model, v_model, 0.5)
+        value_loss_model = loss(q_model, v_model, expectile)
 
         v_data = value.apply({'params': value_params}, data_batch.observations)
         value_loss_data = loss(q_data, v_data, 0.7)
@@ -89,8 +89,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     next_value = value(data_batch.next_observations)
     target_q_data = data_batch.rewards + discount * data_batch.masks * next_value
 
-    target_q_data = jnp.maximum(target_q_data, -50.)
-    target_q_rollout = jnp.maximum(target_q_rollout, -50.)
+    #target_q_data = jnp.maximum(target_q_data, -50.)
+    #target_q_rollout = jnp.maximum(target_q_rollout, -50.)
 
     #target_q_data = jnp.maximum(target_q_data, data_batch.returns_to_go)
 

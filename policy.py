@@ -10,7 +10,7 @@ from tensorflow_probability.substrates import jax as tfp
 tfd = tfp.distributions
 tfb = tfp.bijectors
 
-from common import MLP, Params, PRNGKey, default_init
+from common import MLP, Params, PRNGKey, default_init, Model
 
 LOG_STD_MIN = -10.0
 LOG_STD_MAX = 2.0
@@ -71,21 +71,18 @@ class NormalTanhPolicy(nn.Module):
             return base_dist
 
 
-#@functools.partial(jax.jit, static_argnames=('actor_def', 'distribution'))
+@functools.partial(jax.jit, static_argnames=('actor_def', 'distribution'))
 def _sample_actions(rng: PRNGKey,
-                    actor_def: nn.Module,
-                    actor_params: Params,
+                    actor: Model,
                     observations: np.ndarray,
                     temperature: float = 1.0) -> Tuple[PRNGKey, jnp.ndarray]:
-    dist = actor_def.apply({'params': actor_params}, observations, temperature)
+    dist = actor(observations)
     rng, key = jax.random.split(rng)
     return rng, dist.sample(seed=key)
 
 
 def sample_actions(rng: PRNGKey,
-                   actor_def: nn.Module,
-                   actor_params: Params,
+                   actor: Model,
                    observations: np.ndarray,
                    temperature: float = 1.0) -> Tuple[PRNGKey, jnp.ndarray]:
-    return _sample_actions(rng, actor_def, actor_params, observations,
-                           temperature)
+    return _sample_actions(rng, actor, observations, temperature)
