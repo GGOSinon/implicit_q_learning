@@ -48,10 +48,9 @@ def termination_fn_antangle(obs, act, next_obs):
     done = done[:,None]
     return done
 
-def termination_fn_antmaze(obs, act, next_obs):
+def termination_fn_antmaze(obs, act, next_obs, center, radius):
     assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
-
-    done = np.array([False]).repeat(len(obs))
+    done = ((next_obs[:, :2] - center[None, :]) ** 2).sum(axis=1) < radius
     done = done[:,None]
     return done
 
@@ -135,7 +134,16 @@ def get_termination_fn(task):
     elif 'antangle' in task:
         return termination_fn_antangle
     elif 'antmaze' in task:
-        return termination_fn_antmaze
+        import d4rl
+        import gym
+        env = gym.make(task)
+        dataset = d4rl.qlearning_dataset(env)
+        pos = dataset['observations'][dataset['terminals']][:, :2]
+        cond = np.abs(pos - pos.mean(axis=0, keepdims=True)) < 2*pos.std(axis=0, keepdims=True)
+        cond = np.logical_and(cond[:, 0], cond[:, 1])
+        center = pos[cond].mean(axis=0); radius = ((pos[cond]-center)**2).sum(axis=1).max()
+        print(task, center, radius)
+        return lambda obs, action, next_obs: termination_fn_antmaze(obs, action, next_obs, center, radius)
     elif 'ant' in task:
         return termination_fn_ant
     elif 'walker2d' in task:

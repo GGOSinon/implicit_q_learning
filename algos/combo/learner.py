@@ -7,19 +7,23 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import gym
+import os
+import torch
 
 import policy
 import value_net
 from algos.combo.actor import update_actor, update_alpha
 from common import Batch, InfoDict, Model, PRNGKey
 from algos.combo.critic import update_q, update_v
-from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step
+
+from dynamics.termination_fns import get_termination_fn
+from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step, EnsembleDynamicModel
 from dynamics.model_learner import WorldModel
 from dynamics.oracle import MujocoOracleDynamics
 from offlinerlkit.dynamics.ensemble_dynamics import EnsembleDynamics
 from offlinerlkit.modules import EnsembleDynamicsModel
 from offlinerlkit.utils.scaler import StandardScaler
-from offlinerlkit.utils.termination_fns import get_termination_fn
+#from offlinerlkit.utils.termination_fns import get_termination_fn as get_termination_fn_torch
 from functools import partial
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
@@ -43,7 +47,8 @@ def _update_jit(
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0),
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
                       masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
-                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
+                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),
+                      returns_to_go=None)
 
     new_value, value_info = update_v(target_critic, value, mix_batch, expectile)
     key, key2, key3, rng = jax.random.split(rng, 4)
@@ -90,6 +95,7 @@ class Learner(object):
                  cql_weight: float = None,
                  target_beta: float = None,
                  max_q_backup: bool = False,
+                 reward_scaler: Tuple[float, float] = (1., 0.),
                  #sac_alpha: float = 0.2,
                  **kwargs):
         """
@@ -122,21 +128,36 @@ class Learner(object):
         if dynamics == 'oracle':
             model = MujocoOracleDynamics(env)
         if dynamics == 'torch':
-            dynamics_model = EnsembleDynamicsModel(
-                obs_dim=obs_dim,
-                action_dim=action_dim,
-                hidden_dims=model_hidden_dims,
-                num_ensemble=num_models,
-                num_elites=num_elites,
-                weight_decays=[None] * (len(model_hidden_dims) + 1),
-                device='cuda',
-            )
-            scaler = StandardScaler()
-            termination_fn = get_termination_fn(task=env_name)
-            model = EnsembleDynamics(dynamics_model, None, scaler, termination_fn)
+            mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
+            std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
+            scaler = (jnp.array(mu), jnp.array(std))
+            obs_scaler = (jnp.array(mu[:, :obs_dim]), jnp.array(std[:, :obs_dim]))
+
+            ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
+            ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
+            elites = ckpt['elites']
+
+            self.termination_fn = get_termination_fn(task=env_name)
+            model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
+            model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
+            model = Model.create(model_def, inputs=[model_key, model_key, observations, actions], tx=None)
+
+            ckpt_jax = {}
+            for i in range(4):
+                ckpt_jax[f'layers_{i}'] = {}
+                ckpt_jax[f'layers_{i}']['kernel'] = ckpt[f'backbones.{i}.weight']
+                ckpt_jax[f'layers_{i}']['bias'] = ckpt[f'backbones.{i}.bias']
+            ckpt_jax[f'last_layer'] = {}
+            ckpt_jax[f'last_layer']['kernel'] = ckpt[f'output_layer.weight']
+            ckpt_jax[f'last_layer']['bias'] = ckpt[f'output_layer.bias']
+            ckpt_jax['min_logvar'] = ckpt['min_logvar']
+            ckpt_jax['max_logvar'] = ckpt['max_logvar']
+            ckpt_jaxs = {'model': ckpt_jax}
+            model = model.replace(params = ckpt_jaxs)
 
         action_dim = actions.shape[-1]
-        actor_def = policy.NormalTanhPolicy(hidden_dims,
+        actor_def = policy.NormalTanhPolicy(obs_scaler,
+                                            hidden_dims,
                                             action_dim,
                                             log_std_scale=1e-3,
                                             log_std_min=-5.0,
@@ -160,12 +181,12 @@ class Learner(object):
                              inputs=[alpha_key],
                              tx=optax.adam(learning_rate=alpha_lr))
 
-        critic_def = value_net.DoubleCritic(hidden_dims)
+        critic_def = value_net.DoubleCritic(scaler, hidden_dims)
         critic = Model.create(critic_def,
                               inputs=[critic_key, observations, actions],
                               tx=optax.adam(learning_rate=critic_lr))
 
-        value_def = value_net.ValueCritic(hidden_dims)
+        value_def = value_net.ValueCritic(obs_scaler, hidden_dims)
         value = Model.create(value_def,
                              inputs=[value_key, observations],
                              tx=optax.adam(learning_rate=value_lr))
@@ -192,32 +213,34 @@ class Learner(object):
     def sample_actions(self,
                        observations: np.ndarray,
                        temperature: float = 1.0) -> jnp.ndarray:
-        rng, actions = policy.sample_actions(self.rng, self.actor.apply_fn,
-                                             self.actor.params, observations,
-                                             temperature)
+        rng, actions = policy.sample_actions(self.rng, self.actor, observations, temperature)
         self.rng = rng
 
         actions = np.asarray(actions)
         return np.clip(actions, -1, 1)
 
     def step(self,
+             key: PRNGKey, 
              observations: np.ndarray,
              actions: np.ndarray) -> np.ndarray:
         #rng, sN, rewards, masks = sample_step(self.rng, self.model, observations, actions)
         #self.rng = rng
-        sN, rewards, terminals, _ = self.model.step(observations, actions)
-        rewards, masks = rewards[:, 0], 1- terminals[:, 0]
+        sN, rewards, terminals, _ = self.model(key, observations, actions)
+        rewards, masks = rewards, 1- terminals
 
         return sN, rewards, masks
 
     def rollout(self,
+                key: PRNGKey,
                 observations: np.ndarray,
-                rollout_length: int) -> np.ndarray:
+                rollout_length: int,
+                temperature: float=1.0,) -> np.ndarray:
         states, actions, rewards, masks = [observations], [], [], []
 
         for _ in range(rollout_length):
-            action = self.sample_actions(states[-1])
-            next_obs, reward, mask = self.step(states[-1], action)
+            key, rng = jax.random.split(key)
+            action = self.sample_actions(states[-1], temperature)
+            next_obs, reward, mask = self.step(rng, states[-1], action)
             states.append(next_obs)
             actions.append(action)
             rewards.append(reward)

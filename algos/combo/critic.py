@@ -38,7 +38,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, cq
                       actions=jnp.concatenate([data_batch.actions, model_batch.actions], axis=0), 
                       rewards=jnp.concatenate([data_batch.rewards, model_batch.rewards], axis=0),
                       masks=jnp.concatenate([data_batch.masks, model_batch.masks], axis=0),
-                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),)
+                      next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),
+                      returns_to_go=None)
 
     next_a = actor(mix_batch.next_observations).sample(seed=key1)
     next_q1, next_q2 = target_critic(mix_batch.next_observations, next_a); next_q = jnp.minimum(next_q1, next_q2)

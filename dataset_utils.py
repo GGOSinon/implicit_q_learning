@@ -71,7 +71,7 @@ class Dataset(object):
 class D4RLDataset(Dataset):
     def __init__(self,
                  env: gym.Env,
-                 discount: float,
+                 discount: float = 1.0,
                  clip_to_eps: bool = True,
                  eps: float = 1e-5):
         dataset = d4rl.qlearning_dataset(env)

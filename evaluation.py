@@ -30,7 +30,10 @@ def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv) -> Dict[st
     num_episodes = envs.num_envs
     s = time.time()
     terms = np.zeros(num_episodes, dtype=np.int32)
-    observations, dones = envs.reset(seed=seed), np.zeros(num_episodes, dtype=bool)
+    if seed is None:
+        observations, dones = envs.reset(), np.zeros(num_episodes, dtype=bool)
+    else:
+        observations, dones = envs.reset(seed=seed), np.zeros(num_episodes, dtype=bool)
     step = 0
     while True:
         step += 1
@@ -52,15 +55,15 @@ def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv) -> Dict[st
 
     return stats
 
-def _evaluate(agent: nn.Module, env: gym.Env,
-             num_episodes: int) -> Dict[str, float]:
+def evaluate_single_env(agent: nn.Module, env: gym.Env,
+                        num_episodes: int) -> Dict[str, float]:
     stats = {'return': [], 'length': []}
 
     for _ in range(num_episodes):
         observation, done = env.reset(), False
 
         while not done:
-            action = agent.sample_actions(observation, temperature=0.0)
+            action = agent.sample_actions(observation, temperature=0.0)[0]
             observation, _, done, info = env.step(action)
 
         for k in stats.keys():

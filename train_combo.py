@@ -8,11 +8,14 @@ from absl import app, flags
 from ml_collections import config_flags
 from tensorboardX import SummaryWriter
 
+import subprocess
+import cv2
+import jax
 import wandb
 import wrappers
 import orbax.checkpoint
 from dataset_utils import D4RLDataset, split_into_trajectories, ReplayBuffer
-from evaluation import evaluate
+from evaluation import evaluate, evaluate_single_env, take_video
 from algos.combo.learner import Learner
 
 FLAGS = flags.FLAGS
@@ -27,6 +30,7 @@ flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
+flags.DEFINE_integer('video_interval', 50000, 'Video interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
@@ -61,9 +65,9 @@ def normalize(dataset):
 
     trajs.sort(key=compute_returns)
 
-    dataset.rewards /= compute_returns(trajs[-1]) - compute_returns(trajs[0])
-    dataset.rewards *= 1000.0
-
+    scale = 1000.0 / (compute_returns(trajs[-1]) - compute_returns(trajs[0]))
+    dataset.rewards *= scale
+    return scale, 0.
 
 def make_env_and_dataset(env_name,
                          seed) -> Tuple[gym.Env, D4RLDataset]:
@@ -81,14 +85,14 @@ def make_env_and_dataset(env_name,
     if 'antmaze' in FLAGS.env_name:
         #dataset.rewards -= 1.0
         dataset.rewards = dataset.rewards * 10 - 5.
+        reward_scale, reward_bias = 10, -5.
         # See https://github.com/aviralkumar2907/CQL/blob/master/d4rl/examples/cql_antmaze_new.py#L22
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
     elif ('halfcheetah' in FLAGS.env_name or 'walker2d' in FLAGS.env_name
           or 'hopper' in FLAGS.env_name):
-        pass
-        #normalize(dataset)
+        reward_scale, reward_bias = normalize(dataset)
 
-    return env, dataset
+    return env, dataset, (reward_scale, reward_bias)
 
 
 def main(_):
@@ -97,9 +101,12 @@ def main(_):
                                    write_to_disk=True)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
 
-    env, dataset = make_env_and_dataset(FLAGS.env_name, FLAGS.seed)
+    env, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed)
    
-    eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
+    if 'antmaze' in FLAGS.env_name:
+        eval_envs = None
+    else:
+        eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
     kwargs = dict(FLAGS.config)
     agent = Learner(FLAGS.seed,
@@ -111,11 +118,15 @@ def main(_):
                     cql_weight=FLAGS.cql_weight,
                     target_beta=FLAGS.target_beta,
                     max_q_backup=FLAGS.max_q_backup,
+                    reward_scaler=reward_scaler,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
+    video_path = os.path.join(FLAGS.save_dir, 'videos', FLAGS.env_name)
+    os.makedirs(video_path, exist_ok=True)
+
     if FLAGS.dynamics == 'torch':
-        agent.model.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', FLAGS.env_name))
+        pass
 
     elif FLAGS.dynamics != 'oracle':
         if FLAGS.load_dir is None:
@@ -142,7 +153,8 @@ def main(_):
 
     model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
     data_batch_size = FLAGS.batch_size - model_batch_size
-
+    
+    key = jax.random.PRNGKey(FLAGS.seed)
     eval_returns = []
     for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),
                        smoothing=0.1,
@@ -150,7 +162,7 @@ def main(_):
 
         if (i - 1) % FLAGS.rollout_freq == 0:
             data_batch = dataset.sample(FLAGS.rollout_batch_size)
-            rollout = agent.rollout(data_batch.observations, FLAGS.rollout_length)
+            rollout = agent.rollout(key, data_batch.observations, FLAGS.rollout_length)
             rollout_dataset.insert_batch(rollout['obss'], rollout['actions'], rollout['rewards'], rollout['masks'], 1 - rollout['masks'], rollout['next_obss'])
 
         data_batch = dataset.sample(data_batch_size)
@@ -169,7 +181,10 @@ def main(_):
 
         if i % FLAGS.eval_interval == 0:
             #eval_stats = evaluate(agent, env, FLAGS.eval_episodes)
-            eval_stats = evaluate(agent, eval_envs)
+            if 'antmaze' in FLAGS.env_name:
+                eval_stats = evaluate_single_env(agent, env, FLAGS.eval_episodes)
+            else:
+                eval_stats = evaluate(FLAGS.seed, agent, eval_envs)
 
             for k, v in eval_stats.items():
                 if k == 'return':
@@ -182,6 +197,17 @@ def main(_):
             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),
                        eval_returns,
                        fmt=['%d', '%.1f'])
+
+        if i % FLAGS.video_interval == 0:
+            images, q_values = take_video(FLAGS.seed, agent, env, agent.termination_fn)
+            np.save(os.path.join(video_path, f"q_values_{i}.npz"), q_values)
+            video = cv2.VideoWriter(os.path.join(video_path, 'tmp.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), 50, (images.shape[2], images.shape[1]), True)
+            for j in range(images.shape[0]):
+                video.write(images[j])
+            video.release()
+            subprocess.call(['ffmpeg', '-y', '-i', os.path.join(video_path, "tmp.mp4"), os.path.join(video_path, f"output_{i}.mp4")],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
 
 if __name__ == '__main__':
     app.run(main)
