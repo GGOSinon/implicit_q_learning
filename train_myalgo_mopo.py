@@ -102,8 +102,10 @@ def make_env_and_dataset(env_name,
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
     elif ('halfcheetah' in FLAGS.env_name or 'walker2d' in FLAGS.env_name
           or 'hopper' in FLAGS.env_name):
-        reward_scale, reward_bias = 1., 0.
-        #reward_scale, reward_bias = normalize(dataset)
+        if 'random' in FLAGS.env_name:
+            reward_scale, reward_bias = 1., 0.
+        else:
+            reward_scale, reward_bias = normalize(dataset)
         #normalize(dataset)
 
     return env, dataset, (reward_scale, reward_bias)
