@@ -16,9 +16,11 @@ LOG_STD_MIN = -10.0
 LOG_STD_MAX = 2.0
 
 class SACalpha(nn.Module): 
+    init_value: int = 0.
+
     @nn.compact
     def __call__(self):
-        log_alpha = self.param('log_alpha', nn.initializers.zeros_init(), ())
+        log_alpha = self.param('log_alpha', nn.initializers.constant(self.init_value), ())
         return log_alpha
 
 

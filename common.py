@@ -20,6 +20,8 @@ def expectile_loss(target, pred, expectile):
 def default_init(scale: Optional[float] = jnp.sqrt(2)):
     return nn.initializers.orthogonal(scale)
 
+def inverse_sigmoid(x):
+    return jnp.log(x) - jnp.log(1-x)
 
 PRNGKey = Any
 Params = flax.core.FrozenDict[str, Any]

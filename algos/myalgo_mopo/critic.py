@@ -22,9 +22,13 @@ def update_v(key: PRNGKey, critic: Model, value: Model, actor: Model, data_batch
     def value_loss_fn(value_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         v_model = value.apply({'params': value_params}, model_batch.observations)
         value_loss_model = loss(q_model, v_model, expectile)
+        bellman_error_model_v = jnp.where(q_model > v_model, expectile, 1 - expectile) * (v_model - q_model)
 
         v_data = value.apply({'params': value_params}, data_batch.observations)
         value_loss_data = loss(q_data, v_data, 0.7)
+        bellman_error_data_v = jnp.where(q_data > v_data, expectile, 1 - expectile) * (v_data - q_data)
+
+        bellman_error_v = jnp.concatenate([bellman_error_model_v, bellman_error_data_v], axis=0)
 
         #value_loss = jnp.concatenate([value_loss_model, value_loss_data], axis=0).mean()
         value_loss = value_loss_model.mean()
@@ -34,13 +38,16 @@ def update_v(key: PRNGKey, critic: Model, value: Model, actor: Model, data_batch
             'v_model': v_model.mean(),
             'v_data': v_data.mean(),
             'argmax_adv': (q_data_pi - q_data).mean(),
+            'bellman_error_model_v': bellman_error_model_v.mean(),
+            'bellman_error_data_v': bellman_error_data_v.mean(),
+            'bellman_error_v': bellman_error_v.mean(),
         }
 
     new_value, info = value.apply_gradient(value_loss_fn)
 
     return new_value, info
 # COMBO
-def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, actor: Model, model: Model,
+def update_q(key: PRNGKey, critic: Model, target_value: Model, actor: Model, model: Model,
              data_batch: Batch, model_batch: Batch, discount: float, 
              lamb: float, H: int, expectile: float) -> Tuple[Model, Model, InfoDict]:
 
@@ -61,13 +68,11 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
         rewards.append(rew)
         masks.append(1 - terminal)
 
-    #q1, q2 = target_critic(states[-1], actions[-1]); next_value = jnp.minimum(q1, q2)
-    next_value = value(states[-1])
+    next_value = target_value(states[-1])
     target_q_rollout = []
     value_estimate = next_value
     for i in reversed(range(H)):
-        #q1, q2 = target_critic(states[i+1], actions[i+1]); next_value = jnp.minimum(q1, q2)
-        next_value = value(states[i+1])
+        next_value = target_value(states[i+1])
         value_estimate = rewards[i] + discount * masks[i] * (lamb * value_estimate + (1-lamb) * next_value)
         target_q_rollout.append(value_estimate)
 
@@ -85,8 +90,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     #target_q_rollout = jnp.take_along_axis(target_q_rollout, jnp.argmin(target_q_rollout, axis=1)[:, None], axis=1).squeeze(1)
 
     next_a = actor(data_batch.next_observations).sample(seed=key1)
-    #next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
-    next_value = value(data_batch.next_observations)
+    next_value = target_value(data_batch.next_observations)
     target_q_data = data_batch.rewards + discount * data_batch.masks * next_value
 
     #target_q_data = jnp.maximum(target_q_data, -50.)
@@ -103,24 +107,42 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, value: Model, ac
     def critic_loss_fn(critic_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         q1_data, q2_data = critic.apply({'params': critic_params}, data_batch.observations, data_batch.actions)
         critic_loss_data = loss(target_q_data, q1_data, 0.5) + loss(target_q_data, q2_data, 0.5)
-                           #(loss(data_batch.returns_to_go - q1_data, 1.) + loss(data_batch.returns_to_go - q2_data, 1.)).mean()
+        bellman_error_data_q1 = jnp.where(target_q_data > q1_data, 0.5, 0.5) * (q1_data - target_q_data)
+        bellman_error_data_q2 = jnp.where(target_q_data > q2_data, 0.5, 0.5) * (q2_data - target_q_data)
+        bellman_error_data = bellman_error_data_q1 + bellman_error_data_q2
 
         q1_rollout, q2_rollout = critic.apply({'params': critic_params}, states, actions)
         critic_loss_rollout = loss(target_q_rollout, q1_rollout, expectile) + loss(target_q_rollout, q2_rollout, expectile)
-
         critic_loss_rollout = (critic_loss_rollout * loss_weights).reshape(H, N, num_repeat).mean(axis=(0, 2))
+        bellman_error_rollout_q1 = jnp.where(target_q_rollout > q1_rollout, expectile, 1-expectile) * (q1_rollout - target_q_rollout)
+        bellman_error_rollout_q2 = jnp.where(target_q_rollout > q2_rollout, expectile, 1-expectile) * (q2_rollout - target_q_rollout)
+        bellman_error_rollout = bellman_error_rollout_q1 + bellman_error_rollout_q2
 
-        critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0).mean()
+        bellman_error = jnp.concatenate([bellman_error_data, bellman_error_rollout], axis=0)
+
+        critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0)
+        critic_loss = critic_loss.mean()
+
         return critic_loss, {
             'critic_loss': critic_loss, 'loss_weights': loss_weights.mean(), 'returns_to_go': data_batch.returns_to_go.mean(),
-            'q1_data': q1_data.mean(), 'q1_data_min': q1_data.min(), 'q1_data_max': q1_data.max(),
+            'q1_data': q1_data.mean(), 'q1_data_min': q1_data.min(), 'q1_data_max': q1_data.max(),  
             'q2_data': q2_data.mean(), 'q2_data_min': q2_data.min(), 'q2_data_max': q2_data.max(),
             'q1_rollout': q1_rollout.mean(), 'q1_rollout_min': q1_rollout.min(), 'q1_rollout_max': q1_rollout.max(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
             'q2_rollout': q2_rollout.mean(), 'q2_rollout_min': q2_rollout.min(), 'q2_rollout_max': q2_rollout.max(), 'q2_adv': q2_rollout.mean() - q2_data.mean(),
             'reward_data': data_batch.rewards.mean(), 'reward_data_max': data_batch.rewards.max(), 'reward_data_min': data_batch.rewards.min(),
-            'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),'reward_min': jnp.concatenate(rewards, axis=0).max(),
+            'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),'reward_min': jnp.concatenate(rewards, axis=0).min(),
+            'bellman_error_data': bellman_error_data.mean(), 'bellman_error_rollout': bellman_error_rollout.mean(), 'bellman_error': bellman_error.mean(), 'expectile': expectile,
         }
 
     new_critic, info = critic.apply_gradient(critic_loss_fn)
 
     return new_critic, {**info}
+
+def update_tau_model(tau_model:Model, bellman_error: jnp.ndarray):
+    def tau_model_loss_fn(tau_model_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
+        log_expectile = tau_model.apply({'params': tau_model_params}); expectile = jax.nn.sigmoid(log_expectile)
+        tau_model_loss = -(log_expectile * bellman_error)
+        return tau_model_loss, {}
+    new_tau_model, info = tau_model.apply_gradient(tau_model_loss_fn)
+    return new_tau_model, info
+
