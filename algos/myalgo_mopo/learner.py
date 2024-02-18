@@ -64,7 +64,7 @@ def _update_jit(
     #                                         model_batch, discount, temperature, alpha)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
-    new_critic, critic_info = update_q(key3, critic, target_value, actor, model,
+    new_critic, critic_info = update_q(key3, critic, target_value, target_critic, actor, model,
                                        data_batch, model_batch, discount, lamb, horizon_length, expectile)
    
     #bellman_error = critic_info['bellman_error_rollout']

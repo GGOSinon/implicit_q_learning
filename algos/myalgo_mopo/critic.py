@@ -47,7 +47,7 @@ def update_v(key: PRNGKey, critic: Model, value: Model, actor: Model, data_batch
 
     return new_value, info
 # COMBO
-def update_q(key: PRNGKey, critic: Model, target_value: Model, actor: Model, model: Model,
+def update_q(key: PRNGKey, critic: Model, target_value: Model, target_critic: Model, actor: Model, model: Model,
              data_batch: Batch, model_batch: Batch, discount: float, 
              lamb: float, H: int, expectile: float) -> Tuple[Model, Model, InfoDict]:
 
@@ -68,11 +68,13 @@ def update_q(key: PRNGKey, critic: Model, target_value: Model, actor: Model, mod
         rewards.append(rew)
         masks.append(1 - terminal)
 
-    next_value = target_value(states[-1])
+    #next_value = target_value(states[-1])
+    next_q1, next_q2 = target_critic(states[-1], actions[-1]); next_value = jnp.minimum(next_q1, next_q2)
     target_q_rollout = []
     value_estimate = next_value
     for i in reversed(range(H)):
-        next_value = target_value(states[i+1])
+        #next_value = target_value(states[i+1])
+        next_q1, next_q2 = target_critic(states[i+1], actions[i+1]); next_value = jnp.minimum(next_q1, next_q2)
         value_estimate = rewards[i] + discount * masks[i] * (lamb * value_estimate + (1-lamb) * next_value)
         target_q_rollout.append(value_estimate)
 
@@ -90,7 +92,8 @@ def update_q(key: PRNGKey, critic: Model, target_value: Model, actor: Model, mod
     #target_q_rollout = jnp.take_along_axis(target_q_rollout, jnp.argmin(target_q_rollout, axis=1)[:, None], axis=1).squeeze(1)
 
     next_a = actor(data_batch.next_observations).sample(seed=key1)
-    next_value = target_value(data_batch.next_observations)
+    next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
+    #next_value = target_value(data_batch.next_observations)
     target_q_data = data_batch.rewards + discount * data_batch.masks * next_value
 
     #target_q_data = jnp.maximum(target_q_data, -50.)
