@@ -26,9 +26,6 @@ from offlinerlkit.modules import EnsembleDynamicsModel
 from offlinerlkit.utils.scaler import StandardScaler
 from offlinerlkit.utils.termination_fns import get_termination_fn as get_termination_fn_torch
 from functools import partial
-import dreamerv3
-import dreamerv3.embodied
-from dreamerv3.embodied.envs import from_gym
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     new_target_params = jax.tree_map(
@@ -159,6 +156,9 @@ class Learner(object):
         if self.dynamics == 'oracle':
             model = MujocoOracleDynamics(env)
         if self.dynamics == 'dreamer':
+            import dreamerv3
+            import dreamerv3.embodied
+            from dreamerv3.embodied.envs import from_gym
             config = dreamerv3.embodied.Config(dreamerv3.configs['defaults'])
             config = config.update(dreamerv3.configs['medium'])
             config = config.update({
