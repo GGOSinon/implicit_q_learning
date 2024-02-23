@@ -1,4 +1,10 @@
 import os
+os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ["MKL_NUM_THREADS"] = '1'
+os.environ["OMP_NUM_THREADS"] = '1'
+os.environ["NUM_INTRA_THREADS"] = '1'
+os.environ["NUM_INTER_THREADS"] = '1'
 from typing import Tuple
 
 import cv2
@@ -170,6 +176,7 @@ def main(_):
             "expectile_policy": FLAGS.expectile_policy,
             "rollout_length": FLAGS.rollout_length,
             "horizon_length": FLAGS.horizon_length,
+            "best": None,
 	},
     )
 
