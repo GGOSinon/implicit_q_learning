@@ -38,7 +38,7 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     return target_critic.replace(params=new_target_params)
 
 
-@partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length'])
+@partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length', 'num_actor_updates'])
 def _update_jit(
         rng: PRNGKey, actor: Model, baseline_actor: Model, sac_alpha: Model, critic: Model, baseline_critic: Model, target_critic: Model, target_baseline_critic: Model, model: Model, tau_model: Model,
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,

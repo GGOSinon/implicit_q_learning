@@ -177,6 +177,7 @@ def main(_):
             "expectile_policy": FLAGS.expectile_policy,
             "rollout_length": FLAGS.rollout_length,
             "horizon_length": FLAGS.horizon_length,
+            "num_updates": FLAGS.num_actor_updates,
 	},
     )
 
