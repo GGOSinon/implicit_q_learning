@@ -14,7 +14,8 @@ import policy
 import value_net
 from algos.myalgo_mopo.actor import reinforce_update_actor, awr_update_actor, update_actor, gae_update_actor, update_alpha, update_all
 from common import Batch, InfoDict, Model, PRNGKey, inverse_sigmoid
-from algos.myalgo_mopo.critic import update_q, update_v, update_tau_model
+#from algos.myalgo_nstep.critic import update_q, update_v, update_tau_model
+from algos.myalgo_mopo.critic import update_q, update_v, update_tau_model, update_q_baseline
 
 from dynamics.termination_fns import get_termination_fn
 from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step, EnsembleDynamicModel
@@ -25,6 +26,9 @@ from offlinerlkit.modules import EnsembleDynamicsModel
 from offlinerlkit.utils.scaler import StandardScaler
 from offlinerlkit.utils.termination_fns import get_termination_fn as get_termination_fn_torch
 from functools import partial
+import dreamerv3
+import dreamerv3.embodied
+from dreamerv3.embodied.envs import from_gym
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     new_target_params = jax.tree_map(
@@ -36,9 +40,9 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 
 @partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length'])
 def _update_jit(
-        rng: PRNGKey, actor: Model, sac_alpha: Model, critic: Model, value: Model, target_critic: Model, target_value: Model, model: Model, tau_model: Model,
+        rng: PRNGKey, actor: Model, baseline_actor: Model, sac_alpha: Model, critic: Model, baseline_critic: Model, target_critic: Model, target_baseline_critic: Model, model: Model, tau_model: Model,
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, expectile_policy: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int,
+        expectile: float, expectile_policy: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int, num_actor_updates: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
     
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
@@ -51,28 +55,30 @@ def _update_jit(
                       next_observations=jnp.concatenate([data_batch.next_observations, model_batch.next_observations], axis=0),
                       returns_to_go=None,)
 
-    new_value, value_info = update_v(rng, target_critic, value, actor, data_batch, model_batch, expectile_policy)
+    #new_value, value_info = update_v(rng, target_critic, value, actor, data_batch, model_batch, expectile_policy)
     key, key2, key3, rng = jax.random.split(rng, 4)
 
     #new_actor, actor_info = gae_update_actor(key, actor, target_critic, new_value, model,
     #                                         mix_batch, discount, temperature, alpha, lamb, horizon_length)
-    new_actor, actor_info = update_actor(key, actor, critic, target_value, model,
-                                         mix_batch, discount, temperature, alpha)
+    new_actor = actor
+    for _ in range(num_actor_updates):
+        new_actor, actor_info = update_actor(key, new_actor, critic, model,
+                                             mix_batch, discount, temperature, alpha)
     #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
     #                                         model_batch, discount, temperature, alpha)
     #new_actor, actor_info = reinforce_update_actor(key, actor, target_critic, new_value, model,
     #                                         model_batch, discount, temperature, alpha)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
-    new_critic, critic_info = update_q(key3, critic, target_value, target_critic, actor, model,
-                                       data_batch, model_batch, discount, lamb, horizon_length, expectile)
-   
-    #bellman_error = critic_info['bellman_error_rollout']
-    bellman_error = value_info['bellman_error_model_v']
-    bellman_error = jnp.sign(bellman_error) * (bellman_error ** 2)
-    #bellman_error = jnp.where(jnp.abs(bellman_error) < 1., 0., bellman_error)
+    new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
+                                       data_batch, model_batch, discount, lamb, horizon_length, expectile, None)#target_baseline_critic)
 
-    new_tau_model, tau_model_info = update_tau_model(tau_model, bellman_error)
+    #new_baseline_critic, _ = update_q_baseline(key, baseline_critic, target_baseline_critic, baseline_actor, model,
+    #                                           data_batch, model_batch, discount, lamb, horizon_length, 0.5)
+    
+    new_baseline_critic = baseline_critic
+
+    new_tau_model, tau_model_info = update_tau_model(tau_model, 0.)
 
     '''
     new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
@@ -82,11 +88,11 @@ def _update_jit(
     '''
 
     new_target_critic = target_update(new_critic, target_critic, tau)
-    new_target_value = target_update(new_value, target_value, tau)
+    new_target_baseline_critic = target_update(new_critic, target_baseline_critic, tau)
 
-    return rng, new_actor, new_alpha, new_tau_model, new_critic, new_value, new_target_critic, new_target_value, {
+    return rng, new_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_target_critic, new_target_baseline_critic, {
         **critic_info,
-        **value_info,
+        #**value_info,
         **actor_info,
         **alpha_info,
         **tau_model_info,
@@ -119,6 +125,7 @@ class Learner(object):
                  lamb: float = 0.95,
                  horizon_length: int = None,
                  reward_scaler: Tuple[float, float] = None,
+                 num_actor_updates: int = None,
                  #sac_alpha: float = 0.2,
                  **kwargs):
         """
@@ -136,6 +143,7 @@ class Learner(object):
         self.target_entropy = -action_dim
         self.horizon_length = horizon_length
         self.lamb = lamb
+        self.num_actor_updates = num_actor_updates
         #self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
@@ -150,6 +158,42 @@ class Learner(object):
             model = Model.create(model_def, inputs=[model_key, observations, actions], tx=None)
         if self.dynamics == 'oracle':
             model = MujocoOracleDynamics(env)
+        if self.dynamics == 'dreamer':
+            config = dreamerv3.embodied.Config(dreamerv3.configs['defaults'])
+            config = config.update(dreamerv3.configs['medium'])
+            config = config.update({
+                'logdir': f'./logdir/{env_name}',
+                'encoder.mlp_keys': 'vector',
+                'decoder.mlp_keys': 'vector',
+            })
+            logdir = dreamerv3.embodied.Path(config.logdir) 
+            #config = embodied.Flags(config).parse()
+
+            env = gym.make(env_name)
+            env = from_gym.FromGym(env, obs_key='vector')
+            env = dreamerv3.wrap_env(env, config)
+            env = dreamerv3.embodied.BatchEnv([env], parallel=False)
+
+            step = dreamerv3.embodied.Counter()
+            replay = dreamerv3.embodied.replay.Uniform(config.batch_length, config.replay_size, logdir / 'replay')
+
+            ckpt = dreamerv3.embodied.Checkpoint() 
+            ckpt.step = step
+            ckpt.agent = dreamerv3.Agent(env.obs_space, env.act_space, step, config)
+            ckpt.replay = replay
+            path = '~/logdir/run1/checkpoint.ckpt' 
+            ckpt.load(path)
+            print(ckpt._values.keys())
+
+            model = ckpt._values['agent'].agent.wm
+            print(model)
+            
+            scaler = obs_scaler = (1., 0.)
+
+            #parsed, other = dreamerv3.embodied.Flags(configs=['defaults']).parse_known(None)
+            #config = dreamerv3.embodied.Config(dreamerv3.agent.Agent.configs['defaults'])
+            #model = DreamerV3WorldModel({'vector': obs_space}, {'action': act_space}, config, name='wm')
+
         if self.dynamics == 'torch':
             mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
             std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
@@ -189,12 +233,16 @@ class Learner(object):
 
         if opt_decay_schedule == "cosine":
             schedule_fn = optax.cosine_decay_schedule(-actor_lr, max_steps)
-            optimiser = optax.chain(optax.scale_by_adam(),
+            actor_optimiser = optax.chain(optax.scale_by_adam(),
+                                    optax.scale_by_schedule(schedule_fn))
+            baseline_actor_optimiser = optax.chain(optax.scale_by_adam(),
                                     optax.scale_by_schedule(schedule_fn))
         else:
-            optimiser = optax.adam(learning_rate=actor_lr)
+            actor_optimiser = optax.adam(learning_rate=actor_lr)
+            baseline_actor_optimiser = optax.adam(learning_rate=actor_lr)
 
-        actor = Model.create(actor_def, inputs=[actor_key, observations], tx=optimiser)
+        actor = Model.create(actor_def, inputs=[actor_key, observations], tx=actor_optimiser)
+        baseline_actor = Model.create(actor_def, inputs=[actor_key, observations], tx=baseline_actor_optimiser)
 
         alpha_def = policy.SACalpha() 
         alpha = Model.create(alpha_def, inputs=[alpha_key], tx=optax.adam(learning_rate=alpha_lr))
@@ -206,20 +254,27 @@ class Learner(object):
         critic_opt = optax.adam(learning_rate=value_lr)
         critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = critic_opt)
 
+        baseline_critic_opt = optax.adam(learning_rate=value_lr)
+        baseline_critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = baseline_critic_opt)
+
         value_def = value_net.ValueCritic(obs_scaler, hidden_dims)
         value_opt = optax.adam(learning_rate=value_lr)
         value = Model.create(value_def, inputs=[value_key, observations], tx=value_opt)
 
         target_critic = Model.create(critic_def, inputs=[critic_key, observations, actions])
+        target_baseline_critic = Model.create(critic_def, inputs=[critic_key, observations, actions])
         target_value = Model.create(value_def, inputs=[value_key, observations])
 
         self.actor = actor
+        self.baseline_actor = baseline_actor
         self.alpha = alpha
         self.critic = critic
+        self.baseline_critic = baseline_critic
         self.value = value
         self.model = model
         self.tau_model = tau_model
         self.target_critic = target_critic
+        self.target_baseline_critic = target_baseline_critic
         self.target_value = target_value
         self.rng = rng
 
@@ -269,18 +324,18 @@ class Learner(object):
         
 
     def update(self, data_batch: Batch, model_batch: Batch) -> InfoDict:
-        new_rng, new_actor, new_alpha, new_tau_model, new_critic, new_value, new_target_critic, new_target_value, info = _update_jit(
-            self.rng, self.actor, self.alpha, self.critic, self.value, self.target_critic, self.target_value, self.model, self.tau_model,
+        new_rng, new_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_target_critic, new_target_baseline_critic, info = _update_jit(
+            self.rng, self.actor, self.baseline_actor, self.alpha, self.critic, self.baseline_critic, self.target_critic, self.target_baseline_critic, self.model, self.tau_model,
             data_batch, model_batch, self.discount, self.tau,
-            self.expectile, self.expectile_policy, self.temperature, self.target_entropy, self.lamb, self.horizon_length)
+            self.expectile, self.expectile_policy, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates)
 
         self.rng = new_rng
         self.actor = new_actor
         self.alpha = new_alpha
         self.tau_model = new_tau_model
         self.critic = new_critic
-        self.value = new_value
+        self.baseline_critic = new_baseline_critic
         self.target_critic = new_target_critic
-        self.target_value = new_target_value
+        self.target_baseline_critic = new_target_baseline_critic
 
         return info

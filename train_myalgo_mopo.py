@@ -36,6 +36,7 @@ flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('video_interval', 50000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_float('discount', 0.99, 'discount')
+flags.DEFINE_float('lamb', 0.95, 'lambda for GAE')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
 flags.DEFINE_float('target_beta', None, 'Target cql beta for lagrange.')
 flags.DEFINE_float('temp_explore', 1.0, 'Temperature for exploration.')
@@ -48,6 +49,7 @@ flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
 flags.DEFINE_integer('rollout_retain', 5, 'Rollout retain')
 flags.DEFINE_integer('horizon_length', 5, 'Value estimation length.')
+flags.DEFINE_integer('num_actor_updates', None, 'Number of actor updates')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
 flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
@@ -137,6 +139,8 @@ def main(_):
                     expectile_policy=FLAGS.expectile_policy,
                     hidden_dims=tuple([FLAGS.layer_size for _ in range(FLAGS.num_layers)]),
                     discount=FLAGS.discount,
+                    lamb=FLAGS.lamb,
+                    num_actor_updates=FLAGS.num_actor_updates,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
@@ -144,6 +148,9 @@ def main(_):
     os.makedirs(video_path, exist_ok=True)
 
     if FLAGS.dynamics == 'torch':
+        pass
+
+    elif FLAGS.dynamics == 'dreamer':
         pass
 
     elif FLAGS.dynamics != 'oracle':

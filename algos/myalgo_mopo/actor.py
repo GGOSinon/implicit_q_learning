@@ -6,10 +6,9 @@ import jax.numpy as jnp
 from common import Batch, InfoDict, Model, Params, PRNGKey
 from common import expectile_loss as loss
 
-def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, model: Model,
+def update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
         batch: Batch, discount: float, temperature: float, sac_alpha: float) -> Tuple[Model, InfoDict]:
 
-    v = value(batch.observations)
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         dist = actor.apply({'params': actor_params}, batch.observations, training=True, rngs={'dropout': key})
         a = dist.sample(seed=key); log_probs = dist.log_prob(a)
