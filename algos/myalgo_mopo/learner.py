@@ -35,11 +35,11 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     return target_critic.replace(params=new_target_params)
 
 
-@partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length', 'num_actor_updates'])
+@partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length', 'num_actor_updates', 'use_baseline'])
 def _update_jit(
         rng: PRNGKey, actor: Model, baseline_actor: Model, sac_alpha: Model, critic: Model, baseline_critic: Model, target_critic: Model, target_baseline_critic: Model, model: Model, tau_model: Model,
         data_batch: Batch, model_batch: Batch, discount: float, tau: float,
-        expectile: float, expectile_policy: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int, num_actor_updates: int,
+        expectile: float, expectile_policy: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int, num_actor_updates: int, use_baseline: bool
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
     
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
@@ -67,13 +67,17 @@ def _update_jit(
     #                                         model_batch, discount, temperature, alpha)
     new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
 
-    new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
-                                       data_batch, model_batch, discount, lamb, horizon_length, expectile, None)#target_baseline_critic)
+    if use_baseline:
+        new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
+                                           data_batch, model_batch, discount, lamb, horizon_length, expectile, target_baseline_critic)
+    else:
+        new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
+                                           data_batch, model_batch, discount, lamb, horizon_length, expectile, None)
 
-    #new_baseline_critic, _ = update_q_baseline(key, baseline_critic, target_baseline_critic, baseline_actor, model,
-    #                                           data_batch, model_batch, discount, lamb, horizon_length, 0.5)
+    new_baseline_critic, baseline_critic_info = update_q_baseline(key, baseline_critic, target_baseline_critic, baseline_actor, model,
+                                               mix_batch, discount, 0.5)
     
-    new_baseline_critic = baseline_critic
+    #new_baseline_critic = baseline_critic
 
     new_tau_model, tau_model_info = update_tau_model(tau_model, 0.)
 
@@ -85,10 +89,11 @@ def _update_jit(
     '''
 
     new_target_critic = target_update(new_critic, target_critic, tau)
-    new_target_baseline_critic = target_update(new_critic, target_baseline_critic, tau)
+    new_target_baseline_critic = target_update(baseline_critic, target_baseline_critic, tau)
 
     return rng, new_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_target_critic, new_target_baseline_critic, {
         **critic_info,
+        **baseline_critic_info,
         #**value_info,
         **actor_info,
         **alpha_info,
@@ -123,6 +128,7 @@ class Learner(object):
                  horizon_length: int = None,
                  reward_scaler: Tuple[float, float] = None,
                  num_actor_updates: int = None,
+                 use_baseline: bool = None,
                  #sac_alpha: float = 0.2,
                  **kwargs):
         """
@@ -141,6 +147,7 @@ class Learner(object):
         self.horizon_length = horizon_length
         self.lamb = lamb
         self.num_actor_updates = num_actor_updates
+        self.use_baseline = use_baseline
         #self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
@@ -159,6 +166,7 @@ class Learner(object):
             import dreamerv3
             import dreamerv3.embodied
             from dreamerv3.embodied.envs import from_gym
+            import dreamerv3.ninjax as nj
             config = dreamerv3.embodied.Config(dreamerv3.configs['defaults'])
             config = config.update(dreamerv3.configs['medium'])
             config = config.update({
@@ -188,7 +196,25 @@ class Learner(object):
             model = ckpt._values['agent'].agent.wm
             print(model)
             
-            scaler = obs_scaler = (1., 0.)
+            scaler = obs_scaler = (0., 1.)
+            jax.config.update("jax_transfer_guard", "allow")
+
+            self.model = model
+
+            def step_dreamer(observations, actions):
+                prev_latent, prev_action = model.initial(observations.shape[0])
+                next_latent = self.model.rssm.img_step(prev_latent, actions)
+                rewards = self.model.heads['reward'](next_latent)
+                next_obs = self.model.heads['decoder'](next_latent)
+                conts = self.model.heads['cont'](next_latent)
+                return next_obs, rewards, conts
+
+            self.init_fn = jax.jit(nj.pure(lambda x: model.initial(x.shape[0])))
+            self.step_fn = jax.jit(nj.pure(model.rssm.img_step))
+            self.step_dreamer = jax.jit(nj.pure(step_dreamer))
+
+            key = jax.random.PRNGKey(42)
+            latent, self.model_state = self.init_fn({}, key, observations)
 
             #parsed, other = dreamerv3.embodied.Flags(configs=['defaults']).parse_known(None)
             #config = dreamerv3.embodied.Config(dreamerv3.agent.Agent.configs['defaults'])
@@ -293,10 +319,15 @@ class Learner(object):
              actions: np.ndarray) -> np.ndarray:
         #rng, sN, rewards, masks = sample_step(self.rng, self.model, observations, actions)
         #self.rng = rng
-        sN, rewards, terminals, _ = self.model(key, observations, actions)
+        if self.dynamics == 'torch':
+            next_obs, rewards, terminals, _ = self.model(key, observations, actions)
+        if self.dynamics == 'dreamer':
+            key = jax.random.PRNGKey(42)
+            next_obs, rewards, terminals = self.step_dreamer(self.model_state, key, observations, actions)
+            print(next_obs, rewards, terminals)
         rewards, masks = rewards, 1- terminals
 
-        return sN, rewards, masks
+        return next_obs, rewards, masks
 
     def rollout(self,
                 key: PRNGKey,
@@ -327,7 +358,7 @@ class Learner(object):
         new_rng, new_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_target_critic, new_target_baseline_critic, info = _update_jit(
             self.rng, self.actor, self.baseline_actor, self.alpha, self.critic, self.baseline_critic, self.target_critic, self.target_baseline_critic, self.model, self.tau_model,
             data_batch, model_batch, self.discount, self.tau,
-            self.expectile, self.expectile_policy, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates)
+            self.expectile, self.expectile_policy, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates, self.use_baseline)
 
         self.rng = new_rng
         self.actor = new_actor

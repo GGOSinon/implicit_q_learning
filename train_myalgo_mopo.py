@@ -49,10 +49,11 @@ flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
 flags.DEFINE_integer('rollout_retain', 5, 'Rollout retain')
 flags.DEFINE_integer('horizon_length', 5, 'Value estimation length.')
-flags.DEFINE_integer('num_actor_updates', None, 'Number of actor updates')
+flags.DEFINE_integer('num_actor_updates', 1, 'Number of actor updates')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
 flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
+flags.DEFINE_boolean('use_baseline', False, 'Use baseline')
 config_flags.DEFINE_config_file(
     'config',
     'default.py',
@@ -141,6 +142,7 @@ def main(_):
                     discount=FLAGS.discount,
                     lamb=FLAGS.lamb,
                     num_actor_updates=FLAGS.num_actor_updates,
+                    use_baseline=FLAGS.use_baseline,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
@@ -178,6 +180,7 @@ def main(_):
             "rollout_length": FLAGS.rollout_length,
             "horizon_length": FLAGS.horizon_length,
             "num_updates": FLAGS.num_actor_updates,
+            "use_baseline": FLAGS.use_baseline,
 	},
     )
 
