@@ -125,6 +125,7 @@ def terminaltion_fn_door(obs, act, next_obs):
     return done
 
 def get_termination_fn(task):
+    task = task.lower()
     if 'halfcheetahvel' in task:
         return termination_fn_halfcheetahveljump
     elif 'halfcheetah' in task:
