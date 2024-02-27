@@ -91,8 +91,8 @@ def update_q_baseline(key: PRNGKey, critic: Model, target_critic: Model, actor: 
 
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, model: Model,
-             data_batch: Batch, model_batch: Batch, discount: float, 
-             lamb: float, H: int, expectile: float, base_critic: Model = None) -> Tuple[Model, Model, InfoDict]:
+             data_batch: Batch, model_batch: Batch, model_batch_ratio: float,
+             discount: float, lamb: float, H: int, expectile: float, base_critic: Model = None) -> Tuple[Model, Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
  
@@ -229,8 +229,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
 
         bellman_error = jnp.concatenate([bellman_error_data, bellman_error_rollout], axis=0)
 
-        critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0)
-        critic_loss = critic_loss.mean()
+        #critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0)
+        critic_loss = critic_loss_data.mean() * (1 - model_batch_ratio) + critic_loss_rollout.mean() * model_batch_ratio
 
         critic_info = {
             'critic_loss': critic_loss, 'loss_weights': loss_weights.mean(), 'returns_to_go': data_batch.returns_to_go.mean(),

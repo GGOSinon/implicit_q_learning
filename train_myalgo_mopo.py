@@ -15,7 +15,7 @@ import subprocess
 import wandb
 import wrappers
 import orbax.checkpoint
-from dataset_utils import D4RLDataset, split_into_trajectories, ReplayBuffer
+from dataset_utils import D4RLDataset, NeoRLDataset, split_into_trajectories, ReplayBuffer
 from evaluation import evaluate, take_video
 from algos.myalgo_mopo.learner import Learner
 
@@ -53,7 +53,7 @@ flags.DEFINE_integer('num_actor_updates', 1, 'Number of actor updates')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
 flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
-flags.DEFINE_boolean('use_baseline', False, 'Use baseline')
+flags.DEFINE_string('baseline', None, 'Use baseline')
 config_flags.DEFINE_config_file(
     'config',
     'default.py',
@@ -86,7 +86,14 @@ def normalize(dataset):
 
 def make_env_and_dataset(env_name,
                          seed, discount) -> Tuple[gym.Env, D4RLDataset]:
-    env = gym.make(env_name)
+
+    is_neorl = env_name.split('-')[1] == 'v3' 
+    if is_neorl:
+        import neorl
+        task, version, data_type = tuple(env_name.split("-"))
+        env = neorl.make(task+'-'+version)
+    else:
+        env = gym.make(env_name)
 
     env = wrappers.EpisodeMonitor(env)
     env = wrappers.SinglePrecision(env)
@@ -95,7 +102,10 @@ def make_env_and_dataset(env_name,
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
 
-    dataset = D4RLDataset(env, discount)
+    if is_neorl:
+        dataset = NeoRLDataset(env, data_type, discount)
+    else:
+        dataset = D4RLDataset(env, discount)
 
     if 'antmaze' in FLAGS.env_name:
         #dataset.rewards -= 1.0
@@ -110,6 +120,8 @@ def make_env_and_dataset(env_name,
         else:
             reward_scale, reward_bias = normalize(dataset)
         #normalize(dataset)
+    else:
+        reward_scale, reward_bias = 1., 0.
 
     return env, dataset, (reward_scale, reward_bias)
 
@@ -123,7 +135,12 @@ def main(_):
 
     env, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, FLAGS.discount)
    
-    eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
+    if FLAGS.env_name.split('-')[1] == 'v3':
+        name, version, _ = FLAGS.env_name.split('-')
+        env_name = name + '-' + version
+        eval_envs = gym.vector.make(name, FLAGS.eval_episodes)
+    else:
+        eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
     agent = Learner(FLAGS.seed,
                     env.observation_space.sample()[np.newaxis],
@@ -142,7 +159,7 @@ def main(_):
                     discount=FLAGS.discount,
                     lamb=FLAGS.lamb,
                     num_actor_updates=FLAGS.num_actor_updates,
-                    use_baseline=FLAGS.use_baseline,
+                    baseline=FLAGS.baseline,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
@@ -180,12 +197,12 @@ def main(_):
             "rollout_length": FLAGS.rollout_length,
             "horizon_length": FLAGS.horizon_length,
             "num_updates": FLAGS.num_actor_updates,
-            "use_baseline": FLAGS.use_baseline,
+            "use_baseline": FLAGS.baseline,
 	},
     )
 
-    model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
-    data_batch_size = FLAGS.batch_size - model_batch_size
+    #model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
+    #data_batch_size = FLAGS.batch_size - model_batch_size
 
     key = jax.random.PRNGKey(FLAGS.seed)
     eval_returns = []
@@ -199,9 +216,9 @@ def main(_):
             rollout = agent.rollout(rng, data_batch.observations, FLAGS.rollout_length, FLAGS.temp_explore)
             rollout_dataset.insert_batch(rollout['obss'], rollout['actions'], rollout['rewards'], rollout['masks'], 1 - rollout['masks'], rollout['next_obss'])
 
-        data_batch = dataset.sample(data_batch_size)
-        model_batch = rollout_dataset.sample(model_batch_size)
-        update_info = agent.update(data_batch, model_batch)
+        data_batch = dataset.sample(FLAGS.batch_size)
+        model_batch = rollout_dataset.sample(FLAGS.batch_size)
+        update_info = agent.update(data_batch, model_batch, FLAGS.model_batch_ratio)
 
         if i % FLAGS.log_interval == 0:
             for k, v in update_info.items():
