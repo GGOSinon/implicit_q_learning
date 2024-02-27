@@ -125,6 +125,17 @@ def make_env_and_dataset(env_name,
 
     return env, dataset, (reward_scale, reward_bias)
 
+def get_normalized_score_neorl(x, env_name):
+    if env_name == 'HalfCheetah':
+        max_score = 12284
+        min_score = -298
+    if env_name == 'Hopper':
+        max_score = 3294
+        min_score = 5
+    if env_name == 'Walker2d':
+        max_score = 5143
+        min_score = 1
+    return (x - min_score) / (max_score - min_score)
 
 def main(_):
     summary_writer = SummaryWriter(os.path.join(FLAGS.save_dir, 'tb',
@@ -139,7 +150,7 @@ def main(_):
         name, version, _ = FLAGS.env_name.split('-')
         env_name = name + '-' + version
         eval_envs = gym.vector.make(env_name, FLAGS.eval_episodes, exclude_current_positions_from_observation=False)
-        env.get_normalized_score = (lambda x:x)#get_normalized_score_neorl(FLAGS.env_name)
+        env.get_normalized_score = (lambda x: get_normalized_score_neorl(x, name))
     else:
         eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
