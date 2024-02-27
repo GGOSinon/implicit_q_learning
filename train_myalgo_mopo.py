@@ -138,7 +138,8 @@ def main(_):
     if FLAGS.env_name.split('-')[1] == 'v3':
         name, version, _ = FLAGS.env_name.split('-')
         env_name = name + '-' + version
-        eval_envs = gym.vector.make(name, FLAGS.eval_episodes)
+        eval_envs = gym.vector.make(env_name, FLAGS.eval_episodes, exclude_current_positions_from_observation=False)
+        env.get_normalized_score = (lambda x:x)#get_normalized_score_neorl(FLAGS.env_name)
     else:
         eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
