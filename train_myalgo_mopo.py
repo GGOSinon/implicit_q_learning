@@ -107,15 +107,17 @@ def make_env_and_dataset(env_name,
     else:
         dataset = D4RLDataset(env, discount)
 
-    if 'antmaze' in FLAGS.env_name:
+    env_name = FLAGS.env_name.lower()
+
+    if 'antmaze' in env_name:
         #dataset.rewards -= 1.0
         dataset.rewards = dataset.rewards * 10 - 5.
         reward_scale, reward_bias = 10., -5.
         # See https://github.com/aviralkumar2907/CQL/blob/master/d4rl/examples/cql_antmaze_new.py#L22
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
-    elif ('halfcheetah' in FLAGS.env_name or 'walker2d' in FLAGS.env_name
-          or 'hopper' in FLAGS.env_name):
-        if 'random' in FLAGS.env_name:
+    elif ('halfcheetah' in env_name or 'walker2d' in env_name
+          or 'hopper' in env_name):
+        if 'random' in env_name:
             reward_scale, reward_bias = 1., 0.
         else:
             reward_scale, reward_bias = normalize(dataset)
