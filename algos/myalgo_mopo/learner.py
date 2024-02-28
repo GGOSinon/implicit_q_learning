@@ -60,7 +60,7 @@ def _update_jit(
         new_actor = actor
         for _ in range(num_actor_updates):
             #new_actor, actor_info = gae_update_actor(key, new_actor, critic, model,
-            #                                     model_batch, discount, temperature, alpha, lamb, horizon_length, expectile)
+            #                                     model_batch, discount, temperature, alpha, lamb, horizon_length, 0.1)
             new_actor, actor_info = update_actor(key, new_actor, critic, model,
                                                  mix_batch, discount, temperature, alpha)
         #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
