@@ -136,7 +136,7 @@ def update_all(key: PRNGKey, actor: Model, critic: Model, target_critic: Model, 
     # Actor update
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
     
-    num_repeat = 50; N = model_batch.observations.shape[0]
+    num_repeat = 10; N = model_batch.observations.shape[0]
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         Robs = model_batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
         dist = actor.apply({'params': actor_params}, Robs, training=True)

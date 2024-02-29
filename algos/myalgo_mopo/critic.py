@@ -49,7 +49,7 @@ def update_v(key: PRNGKey, critic: Model, value: Model, actor: Model, data_batch
 
 # COMBO
 def update_q_baseline(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, model: Model,
-        batch: Batch, discount: float, expectile: float) -> Tuple[Model, Model, InfoDict]:
+        batch: Batch, discount: float, expectile: float, num_repeat: int) -> Tuple[Model, Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
 
@@ -57,7 +57,6 @@ def update_q_baseline(key: PRNGKey, critic: Model, target_critic: Model, actor: 
     states = batch.observations
     actions = jax.random.uniform(key1, (N, action_dim), minval=-1., maxval=1.)
 
-    num_repeat = 50
     next_states, rewards, terminals, _ = model(key2, states, actions)
     next_obs = next_states[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1) 
     next_a = jax.random.uniform(key3, (N * num_repeat, action_dim), minval=-1., maxval=1.)
@@ -92,11 +91,11 @@ def update_q_baseline(key: PRNGKey, critic: Model, target_critic: Model, actor: 
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, model: Model,
              data_batch: Batch, model_batch: Batch, model_batch_ratio: float,
-             discount: float, lamb: float, H: int, expectile: float, base_critic: Model = None) -> Tuple[Model, Model, InfoDict]:
+             discount: float, lamb: float, H: int, expectile: float, base_critic: Model, num_repeat: int) -> Tuple[Model, Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
  
-    num_repeat = 50; N = model_batch.observations.shape[0]
+    N = model_batch.observations.shape[0]
     Robs = model_batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
     #Ra = model_batch.actions[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
     Ra = actor(Robs).sample(seed=key1)
