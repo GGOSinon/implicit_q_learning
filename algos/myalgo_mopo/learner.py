@@ -82,6 +82,8 @@ def _update_jit(
 
     if baseline is None:
         new_baseline_critic = baseline_critic
+        new_baseline_value = baseline_value
+        new_target_baseline_critic = target_baseline_critic
         baseline_info = {}
 
     if baseline == 'random':
