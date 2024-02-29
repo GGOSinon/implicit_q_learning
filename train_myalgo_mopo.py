@@ -53,6 +53,7 @@ flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
+flags.DEFINE_integer('num_repeat', 1, 'Number of rollouts')
 flags.DEFINE_integer('rollout_retain', 5, 'Rollout retain')
 flags.DEFINE_integer('horizon_length', 5, 'Value estimation length.')
 flags.DEFINE_integer('num_actor_updates', 1, 'Number of actor updates')
@@ -180,6 +181,7 @@ def main(_):
                     lamb=FLAGS.lamb,
                     num_actor_updates=FLAGS.num_actor_updates,
                     baseline=FLAGS.baseline,
+                    num_repeat=FLAGS.num_repeat,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
 
@@ -218,6 +220,7 @@ def main(_):
             "horizon_length": FLAGS.horizon_length,
             "best": None,
             "num_updates": FLAGS.num_actor_updates,
+            "num_repeat": FLAGS.num_repeat,
             "use_baseline": FLAGS.baseline,
 	},
     )
