@@ -124,8 +124,52 @@ def terminaltion_fn_door(obs, act, next_obs):
     done = done[:, None]
     return done
 
+def termination_fn_neorl_halfcheetah(obs, act, next_obs):
+    assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+
+    done = np.array([False] * obs.shape[0])
+    done = done[:, None]
+    return done
+
+def termination_fn_neorl_hopper(obs, act, next_obs):
+    assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+
+    z = next_obs[:, 1:2]
+    angle = next_obs[:, 2:3]
+    state = next_obs[:, 3:]
+
+    min_state, max_state = (-100.0, 100.0)
+    min_z, max_z = (0.7, float('inf'))
+    min_angle, max_angle = (-0.2, 0.2)
+
+    healthy_state = np.all(np.logical_and(min_state < state, state < max_state), axis=-1, keepdims=True)
+    healthy_z = np.logical_and(min_z < z, z < max_z)
+    healthy_angle = np.logical_and(min_angle < angle, angle < max_angle)
+
+    is_healthy = np.logical_and(np.logical_and(healthy_state, healthy_z), healthy_angle)
+
+    done = np.logical_not(is_healthy).reshape(-1, 1)
+    return done
+
+def termination_fn_neorl_walker2d(obs, act, next_obs):
+    assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+
+    min_z, max_z = (0.8, 2.0)
+    min_angle, max_angle = (-1.0, 1.0)
+    min_state, max_state = (-100.0, 100.0)
+    
+    z = next_obs[:, 1:2]
+    angle = next_obs[:, 2:3]
+    state = next_obs[:, 3:]
+    
+    healthy_state = np.all(np.logical_and(min_state < state, state < max_state), axis=-1, keepdims=True)
+    healthy_z = np.logical_and(min_z < z, z < max_z)
+    healthy_angle = np.logical_and(min_angle < angle, angle < max_angle)
+    is_healthy = np.logical_and(np.logical_and(healthy_state, healthy_z), healthy_angle)
+    done = np.logical_not(is_healthy).reshape(-1, 1)
+    return done
+
 def get_termination_fn(task):
-    task = task.lower()
     if 'halfcheetahvel' in task:
         return termination_fn_halfcheetahveljump
     elif 'halfcheetah' in task:
@@ -161,5 +205,11 @@ def get_termination_fn(task):
         return termination_fn_pen
     elif 'door' in task:
         return terminaltion_fn_door
+    elif 'HalfCheetah' in task:
+        return termination_fn_neorl_halfcheetah
+    elif 'Hopper' in task:
+        return termination_fn_neorl_hopper
+    elif 'Walker2d' in task:
+        return termination_fn_neorl_walker2d
     else:
         raise np.zeros
