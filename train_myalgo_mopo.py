@@ -11,6 +11,7 @@ from tensorboardX import SummaryWriter
 import jax
 import jax.numpy as jnp
 import subprocess
+import pickle as pkl
 
 import wandb
 import wrappers
@@ -248,8 +249,10 @@ def main(_):
             summary_writer.flush()
 
         if i % FLAGS.video_interval == 0:
-            images, q_values = take_video(FLAGS.seed, agent, env, agent.termination_fn)
+            images, q_values, trajectory = take_video(FLAGS.seed, agent, env, agent.termination_fn)
             np.save(os.path.join(video_path, f"q_values_{i}.npz"), q_values)
+            with open(os.path.join(video_path, f"traj_{i}.pkl"), 'wb') as F:
+                pkl.dump(trajectory, F)
             video = cv2.VideoWriter(os.path.join(video_path, 'tmp.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), 50, (images.shape[2], images.shape[1]), True)
             for j in range(images.shape[0]):
                 video.write(images[j])

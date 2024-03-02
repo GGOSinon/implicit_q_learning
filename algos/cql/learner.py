@@ -95,8 +95,11 @@ class Learner(object):
         rng = jax.random.PRNGKey(seed)
         rng, model_key, actor_key, alpha_key, critic_key, value_key = jax.random.split(rng, 6)
 
+        scaler = (1., 0.)
+
         action_dim = actions.shape[-1]
-        actor_def = policy.NormalTanhPolicy(hidden_dims,
+        actor_def = policy.NormalTanhPolicy(scaler,
+                                            hidden_dims,
                                             action_dim,
                                             log_std_scale=1e-3,
                                             log_std_min=-5.0,
@@ -120,12 +123,12 @@ class Learner(object):
                              inputs=[alpha_key],
                              tx=optax.adam(learning_rate=alpha_lr))
 
-        critic_def = value_net.DoubleCritic(hidden_dims)
+        critic_def = value_net.DoubleCritic(scaler, hidden_dims)
         critic = Model.create(critic_def,
                               inputs=[critic_key, observations, actions],
                               tx=optax.adam(learning_rate=critic_lr))
 
-        value_def = value_net.ValueCritic(hidden_dims)
+        value_def = value_net.ValueCritic(scaler, hidden_dims)
         value = Model.create(value_def,
                              inputs=[value_key, observations],
                              tx=optax.adam(learning_rate=value_lr))
@@ -151,9 +154,7 @@ class Learner(object):
     def sample_actions(self,
                        observations: np.ndarray,
                        temperature: float = 1.0) -> jnp.ndarray:
-        rng, actions = policy.sample_actions(self.rng, self.actor.apply_fn,
-                                             self.actor.params, observations,
-                                             temperature)
+        rng, actions = policy.sample_actions(self.rng, self.actor, observations, temperature)
         self.rng = rng
 
         actions = np.asarray(actions)

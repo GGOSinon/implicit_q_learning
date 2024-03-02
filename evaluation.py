@@ -9,20 +9,25 @@ from tqdm import tqdm
 
 def take_video(seed: int, agent: nn.Module, render_env: gym.Env, termination_fn) -> Dict[str, float]:
     observation = render_env.reset()
-    images, q_values = [], []
+    images, q_values, states, actions, rewards = [], [], [observation], [], []
     while True:
         image = render_env.render(mode='rgb_array')
         images.append(image)
-        actions = agent.sample_actions(observation, temperature=0.0)
-        action = np.array(actions)[0]
+        action = agent.sample_actions(observation, temperature=0.0)[0]
         observation, reward, done, info = render_env.step(action)
         q1, q2 = agent.critic(observation[None], action[None])
         q_values.append(np.minimum(q1, q2)[0])
+        states.append(observation)
+        actions.append(action)
+        rewards.append(reward)
         if done:
             break
     images = np.stack(images, axis=0)
     q_values = np.stack(q_values, axis=0)
-    return images, q_values
+    states = np.stack(states, axis=0)
+    actions = np.stack(actions, axis=0)
+    rewards = np.stack(rewards, axis=0)
+    return images, q_values, (states, actions, rewards)
 
 def evaluate(seed: int, agent: nn.Module, envs: gym.vector.VectorEnv) -> Dict[str, float]:
     stats = {'return': [], 'length': []}
