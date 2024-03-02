@@ -300,13 +300,15 @@ class Learner(object):
         if baseline is not None:
             baseline_actor = Model.create(actor_def, inputs=[actor_key, observations], tx=baseline_actor_optimiser)
 
+            baseline_critic_def = value_net.DoubleCritic(scaler, hidden_dims)
             baseline_critic_opt = optax.adam(learning_rate=value_lr)
-            baseline_critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = baseline_critic_opt)
+            baseline_critic = Model.create(baseline_critic_def, inputs=[critic_key, observations, actions], tx = baseline_critic_opt)
 
+            baseline_value_def = value_net.ValueCritic(obs_scaler, hidden_dims)
             baseline_value_opt = optax.adam(learning_rate=value_lr)
-            baseline_value = Model.create(value_def, inputs=[value_key, observations], tx = baseline_value_opt)
+            baseline_value = Model.create(baseline_value_def, inputs=[value_key, observations], tx = baseline_value_opt)
 
-            target_baseline_critic = Model.create(critic_def, inputs=[critic_key, observations, actions])
+            target_baseline_critic = Model.create(baseline_critic_def, inputs=[critic_key, observations, actions])
         else:
             baseline_actor = None
             baseline_critic = None
