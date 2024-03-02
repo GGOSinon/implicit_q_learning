@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from common import Batch, InfoDict, Model, Params, PRNGKey
 
 
-def _update(key: PRNGKey, actor: Model, critic: Model, value: Model,
+def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model,
            batch: Batch, temperature: float) -> Tuple[Model, InfoDict]:
     v = value(batch.observations)
 

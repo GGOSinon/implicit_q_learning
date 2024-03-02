@@ -5,9 +5,8 @@ import jax.numpy as jnp
 
 from common import Batch, InfoDict, Model, Params, PRNGKey
 
-def update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model,
-        batch: Batch, temperature: float, sac_alpha: float) -> Tuple[Model, InfoDict]:
-    v = value(batch.observations)
+def update_actor(key: PRNGKey, actor: Model, critic: Model,
+        batch: Batch, sac_alpha: float) -> Tuple[Model, InfoDict]:
 
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         dist = actor.apply({'params': actor_params},

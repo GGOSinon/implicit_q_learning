@@ -17,6 +17,9 @@ from common import Batch, InfoDict, Model, PRNGKey, inverse_sigmoid
 #from algos.myalgo_nstep.critic import update_q, update_v, update_tau_model
 from algos.myalgo_mopo.critic import update_q, update_v, update_tau_model, update_q_baseline
 from algos.iql.critic import update_q as update_iql_q, update_v as update_iql_v
+from algos.iql.actor import update_actor as update_iql_actor
+from algos.cql.critic import update_q as update_cql_q
+from algos.cql.actor import update_actor as update_cql_actor
 
 from dynamics.termination_fns import get_termination_fn
 from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step, EnsembleDynamicModel
@@ -82,25 +85,39 @@ def _update_jit(
 
     if baseline is None:
         new_baseline_critic = baseline_critic
+        new_baseline_value = baseline_value
+        new_target_baseline_critic = target_baseline_critic
         baseline_info = {}
 
     if baseline == 'random':
         new_baseline_critic, baseline_critic_info = update_q_baseline(key, baseline_critic, target_baseline_critic, baseline_actor, model, model_batch, discount, 0.5, num_repeat)
         new_baseline_value = baseline_value
+        new_baseline_actor = baseline_actor
         baseline_info = {**baseline_critic_info}
         new_target_baseline_critic = target_update(baseline_critic, target_baseline_critic, tau)
     
     if baseline == 'iql':
         new_baseline_critic, baseline_critic_info = update_iql_q(baseline_critic, baseline_value, data_batch, discount)
         new_baseline_value, baseline_value_info = update_iql_v(target_baseline_critic, baseline_value, data_batch, 0.5)
+        new_baseline_actor = update_iql_actor(key3, baseline_actor, baseline_critic, baseline_value, data_batch, temperature) 
         baseline_info = {**baseline_critic_info, **baseline_value_info}
         baseline_info = {'iql_'+k: v for (k, v) in baseline_info.items()}
+        new_target_baseline_critic = target_update(baseline_critic, target_baseline_critic, tau)
+
+    if baseline == 'cql':
+        new_baseline_critic, _, baseline_critic_info = update_cql_q(key3, baseline_critic, target_baseline_critic, baseline_actor, None,
+                                                                    data_batch, discount, 5.0, None, False)
+        new_baseline_value = baseline_value
+        new_baseline_actor, baseline_actor_info = update_cql_actor(key3, baseline_actor, baseline_critic,
+                                                                   data_batch, alpha)
+        baseline_info = {**baseline_critic_info, **baseline_actor_info}
+        baseline_info = {'cql_'+k: v for (k, v) in baseline_info.items()}
         new_target_baseline_critic = target_update(baseline_critic, target_baseline_critic, tau)
 
     new_tau_model, tau_model_info = update_tau_model(tau_model, 0.)
     new_target_critic = target_update(new_critic, target_critic, tau)
 
-    return rng, new_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, {
+    return rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, {
         **critic_info,
         **baseline_info,
         #**value_info,
@@ -380,13 +397,14 @@ class Learner(object):
         
 
     def update(self, data_batch: Batch, model_batch: Batch, model_batch_ratio: float) -> InfoDict:
-        new_rng, new_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, info = _update_jit(
+        new_rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, info = _update_jit(
             self.rng, self.actor, self.baseline_actor, self.alpha, self.critic, self.baseline_critic, self.baseline_value, self.target_critic, self.target_baseline_critic, self.model, self.tau_model,
             data_batch, model_batch, model_batch_ratio, self.discount, self.tau,
             self.expectile, self.expectile_policy, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates, self.baseline, self.num_repeat)
 
         self.rng = new_rng
         self.actor = new_actor
+        self.baseline_actor = new_baseline_actor
         self.alpha = new_alpha
         self.tau_model = new_tau_model
         self.critic = new_critic
