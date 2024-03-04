@@ -4,7 +4,7 @@ import ml_collections
 def get_config():
     config = ml_collections.ConfigDict()
 
-    lr = 3e-4
+    lr = 1e-4
     config.actor_lr = lr
     config.alpha_lr = lr
     config.value_lr = lr

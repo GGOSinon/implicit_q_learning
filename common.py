@@ -23,6 +23,9 @@ def default_init(scale: Optional[float] = jnp.sqrt(2)):
 def inverse_sigmoid(x):
     return jnp.log(x) - jnp.log(1-x)
 
+def symlog(x):
+    return jnp.sign(x) * jnp.log(1 + jnp.abs(x))
+
 PRNGKey = Any
 Params = flax.core.FrozenDict[str, Any]
 PRNGKey = Any
@@ -40,6 +43,7 @@ class MLP(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
+        x = symlog(x)
         for i, size in enumerate(self.hidden_dims):
             x = nn.Dense(size, kernel_init=default_init())(x)
             if i + 1 < len(self.hidden_dims) or self.activate_final:
