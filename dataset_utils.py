@@ -113,7 +113,50 @@ class NeoRLDataset(Dataset):
                          returns_to_go=returns_to_go.astype(np.float32),
                          size=len(dataset['observations']))
 
+class D4RLTimeDataset(Dataset):
+    def __init__(self,
+                 env: gym.Env,
+                 T: int,
+                 discount: float = 1.0,
+                 clip_to_eps: bool = True,
+                 eps: float = 1e-5):
+        dataset = d4rl.qlearning_dataset(env)
 
+        if clip_to_eps:
+            lim = 1 - eps
+            dataset['actions'] = np.clip(dataset['actions'], -lim, lim)
+
+        dones_float = np.zeros_like(dataset['rewards'])
+
+        for i in range(len(dones_float) - 1):
+            if np.linalg.norm(dataset['observations'][i + 1] -
+                              dataset['next_observations'][i]
+                              ) > 1e-6 or dataset['terminals'][i] == 1.0:
+                dones_float[i] = 1
+            else:
+                dones_float[i] = 0
+
+        dones_float[-1] = 1
+        dataset['dones_float'] = dones_float
+        for k in dataset:
+            dataset[k] = np.lib.stride_tricks.sliding_window_view(dataset[k], T, axis=0)
+            if len(dataset[k].shape) == 3:
+                dataset[k] = dataset[k].transpose((0, 2, 1))
+            #print(k, dataset[k].shape)
+
+        returns_to_go = np.zeros_like(dataset['rewards'])
+        #returns_to_go[-1] = dataset['rewards'][-1] 
+        #for i in reversed(range(len(dones_float) - 1)):
+        #    returns_to_go[i] = dataset['rewards'][i] + returns_to_go[i+1] * discount * (1.0 - dones_float[i])
+
+        super().__init__(dataset['observations'].astype(np.float32),
+                         actions=dataset['actions'].astype(np.float32),
+                         rewards=dataset['rewards'].astype(np.float32),
+                         masks=1.0 - dataset['terminals'].astype(np.float32),
+                         dones_float=dones_float.astype(np.float32),
+                         next_observations=dataset['next_observations'].astype(np.float32),
+                         returns_to_go=returns_to_go.astype(np.float32),
+                         size=len(dataset['observations']))
 
 class D4RLDataset(Dataset):
     def __init__(self,

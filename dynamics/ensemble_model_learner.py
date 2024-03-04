@@ -109,6 +109,7 @@ class EnsembleDynamicModel(nn.Module):
     reward_scaler: Tuple[float, float]
     elites: jnp.ndarray
     terminal_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
+    output_all: bool = False
 
     def __call__(self,
                  key: PRNGKey,
@@ -128,12 +129,17 @@ class EnsembleDynamicModel(nn.Module):
         # choose one model from ensemble
         num_models, batch_size, _ = ensemble_samples.shape
 
-        model_idxs = jax.random.choice(key, self.elites, (1, batch_size, 1))
-        samples = jnp.take_along_axis(ensemble_samples, model_idxs, axis=0)[0]
-        
-        next_obs = samples[:, :-1]
-        reward = samples[:, -1] * self.reward_scaler[0] + self.reward_scaler[1]
-        terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
+        if self.output_all:
+            samples = ensemble_samples
+            next_obs = samples[..., :-1]
+            reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
+            terminal = self.terminal_fn(observations, actions, next_obs[0]).squeeze(1)
+        else:
+            model_idxs = jax.random.choice(key, self.elites, (1, batch_size, 1))
+            samples = jnp.take_along_axis(ensemble_samples, model_idxs, axis=0)[0] 
+            next_obs = samples[..., :-1]
+            reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
+            terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
         info = {}
         info["raw_reward"] = reward
 
