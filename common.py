@@ -40,10 +40,11 @@ class MLP(nn.Module):
     activate_final: int = False
     dropout_rate: Optional[float] = None
     use_norm: Optional[bool] = False
+    use_symlog: Optional[bool] = False
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
-        x = symlog(x)
+        if self.use_symlog: x = symlog(x)
         for i, size in enumerate(self.hidden_dims):
             x = nn.Dense(size, kernel_init=default_init())(x)
             if i + 1 < len(self.hidden_dims) or self.activate_final:
