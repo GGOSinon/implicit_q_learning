@@ -11,7 +11,8 @@ from tensorboardX import SummaryWriter
 
 import wrappers
 from dataset_utils import Dataset, D4RLDataset, split_into_trajectories
-from dynamics.ensemble_model_learner import Learner
+#from dynamics.ensemble_model_learner import Learner
+from dynamics.dreamer_learner import Learner
 from flax.training import checkpoints, orbax_utils
 import orbax
 
@@ -120,10 +121,10 @@ def main(_):
                        smoothing=0.1,
                        disable=not FLAGS.tqdm)
 
-    ckpt = {'model': agent.model.params}
-    orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-    save_args = orbax_utils.save_args_from_target(ckpt)
-    orbax_checkpointer.save('./tmp/flax_ckpt/orbax/single_save/', ckpt, save_args=save_args, force=True)
+    #ckpt = {'model': agent.model.params}
+    #orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    #save_args = orbax_utils.save_args_from_target(ckpt)
+    #orbax_checkpointer.save('./tmp/flax_ckpt/orbax/single_save/', ckpt, save_args=save_args, force=True)
 
     lossD, lossR, lossM = [], [], []
     for i in pbar:

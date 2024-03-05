@@ -62,10 +62,10 @@ def _update_jit(
     if True:
         new_actor = actor
         for _ in range(num_actor_updates):
-            #new_actor, actor_info = gae_update_actor(key, new_actor, critic, model,
-            #                                     model_batch, discount, temperature, alpha, lamb, horizon_length, 0.1)
-            new_actor, actor_info = update_actor(key, new_actor, critic, model,
-                                                 mix_batch, discount, temperature, alpha)
+            new_actor, actor_info = gae_update_actor(key, new_actor, critic, model,
+                                                     model_batch, discount, temperature, alpha, lamb, horizon_length, expectile)
+            #new_actor, actor_info = update_actor(key, new_actor, critic, model,
+            #                                     mix_batch, discount, temperature, alpha)
         #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
         #                                         model_batch, discount, temperature, alpha)
         #new_actor, actor_info = reinforce_update_actor(key, actor, target_critic, new_value, model,
@@ -318,11 +318,11 @@ class Learner(object):
         if baseline is not None:
             baseline_actor = Model.create(actor_def, inputs=[actor_key, observations], tx=baseline_actor_optimiser)
 
-            baseline_critic_def = value_net.DoubleCritic(scaler, hidden_dims)
+            baseline_critic_def = value_net.DoubleCritic(scaler, hidden_dims, use_norm=True)
             baseline_critic_opt = optax.adam(learning_rate=value_lr)
             baseline_critic = Model.create(baseline_critic_def, inputs=[critic_key, observations, actions], tx = baseline_critic_opt)
 
-            baseline_value_def = value_net.ValueCritic(obs_scaler, hidden_dims)
+            baseline_value_def = value_net.ValueCritic(obs_scaler, hidden_dims, use_norm=True)
             baseline_value_opt = optax.adam(learning_rate=value_lr)
             baseline_value = Model.create(baseline_value_def, inputs=[value_key, observations], tx = baseline_value_opt)
 
