@@ -148,6 +148,28 @@ def get_normalized_score_neorl(x, env_name):
     return (x - min_score) / (max_score - min_score)
 
 def main(_):
+    wandb.login(key=FLAGS.wandb_key)
+    run = wandb.init(
+	# Set the project where this run will be logged
+	project="IQL",
+        name=f"{FLAGS.env_name}_{FLAGS.seed}",
+	# Track hyperparameters and run metadata
+	config={
+	    "env_name": FLAGS.env_name,
+	    "seed": FLAGS.seed,
+            "expectile": FLAGS.expectile,
+            "expectile_policy": FLAGS.expectile_policy,
+            "rollout_length": FLAGS.rollout_length,
+            "horizon_length": FLAGS.horizon_length,
+            "best": None,
+            "num_updates": FLAGS.num_actor_updates,
+            "num_repeat": FLAGS.num_repeat,
+            "use_baseline": FLAGS.baseline,
+            "model_batch_ratio": FLAGS.model_batch_ratio,
+            "discount": FLAGS.discount,
+	},
+    )
+
     summary_writer = SummaryWriter(os.path.join(FLAGS.save_dir, 'tb',
                                                 str(FLAGS.seed)),
                                    write_to_disk=True)
@@ -205,26 +227,6 @@ def main(_):
         agent.model = agent.model.replace(params = raw_restored['model'])
 
     rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=FLAGS.rollout_retain*FLAGS.rollout_length*FLAGS.rollout_batch_size)
-
-    wandb.login(key=FLAGS.wandb_key)
-    run = wandb.init(
-	# Set the project where this run will be logged
-	project="IQL",
-        name=f"{FLAGS.env_name}_{FLAGS.seed}",
-	# Track hyperparameters and run metadata
-	config={
-	    "env_name": FLAGS.env_name,
-	    "seed": FLAGS.seed,
-            "expectile": FLAGS.expectile,
-            "expectile_policy": FLAGS.expectile_policy,
-            "rollout_length": FLAGS.rollout_length,
-            "horizon_length": FLAGS.horizon_length,
-            "best": None,
-            "num_updates": FLAGS.num_actor_updates,
-            "num_repeat": FLAGS.num_repeat,
-            "use_baseline": FLAGS.baseline,
-	},
-    )
 
     #model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
     #data_batch_size = FLAGS.batch_size - model_batch_size

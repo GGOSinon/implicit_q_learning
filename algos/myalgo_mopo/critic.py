@@ -153,7 +153,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
 
     else:
         target_q_rollout = []
-        next_q1, next_q2 = target_critic(states[-1], actions[-1]); next_value = jnp.minimum(next_q1, next_q2)
+        #next_q1, next_q2 = target_critic(states[-1], actions[-1]); next_value = jnp.minimum(next_q1, next_q2)
+        next_q1, next_q2 = critic(states[-1], actions[-1]); next_value = jnp.minimum(next_q1, next_q2)
         if base_critic is not None:
             base_q1, base_q2 = base_critic(states[-1], actions[-1]); base_next_value = jnp.minimum(base_q1, base_q2)
             next_value = jnp.maximum(next_value, base_next_value)
@@ -161,7 +162,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
             clip_ratio_rollout = []
         value_estimate = next_value
         for i in reversed(range(H)):
-            next_q1, next_q2 = target_critic(states[i+1], actions[i+1]); next_value = jnp.minimum(next_q1, next_q2)
+            #next_q1, next_q2 = target_critic(states[i+1], actions[i+1]); next_value = jnp.minimum(next_q1, next_q2)
+            next_q1, next_q2 = critic(states[i+1], actions[i+1]); next_value = jnp.minimum(next_q1, next_q2) 
             if base_critic is not None:
                 base_q1, base_q2 = base_critic(states[i+1], actions[i+1]); base_next_value = jnp.minimum(base_q1, base_q2)
                 next_value = jnp.maximum(next_value, base_next_value)
@@ -193,7 +195,8 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
     #target_q_rollout = jnp.take_along_axis(target_q_rollout, jnp.argmin(target_q_rollout, axis=1)[:, None], axis=1).squeeze(1)
 
     next_a = actor(data_batch.next_observations).sample(seed=key1)
-    next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
+    next_q1, next_q2 = critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
+    #next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
     if base_critic is not None:
         base_q1, base_q2 = base_critic(data_batch.next_observations, next_a); base_next_value = jnp.minimum(base_q1, base_q2)
         next_value = jnp.maximum(next_value, base_next_value)
@@ -242,6 +245,12 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
         #critic_loss = jnp.concatenate([critic_loss_data, critic_loss_rollout], axis=0)
         critic_loss = critic_loss_data.mean() * (1 - model_batch_ratio) + critic_loss_rollout.mean() * model_batch_ratio
 
+        q1_target_data, q2_target_data = target_critic(data_batch.observations, data_batch.actions)
+        critic_reg_loss_data = (q1_target_data - q1_data) ** 2 + (q2_target_data - q2_data) ** 2
+        q1_target_rollout, q2_target_rollout = target_critic(states, actions)
+        critic_reg_loss_rollout = (q1_target_rollout - q1_rollout) ** 2 + (q2_target_rollout - q2_rollout) ** 2
+        critic_reg_loss = critic_reg_loss_data.mean() * (1 - model_batch_ratio) + critic_reg_loss_rollout.mean() * model_batch_ratio
+
         critic_info = {
             'critic_loss': critic_loss, 'loss_weights': loss_weights.mean(), 'returns_to_go': data_batch.returns_to_go.mean(),
             'q1_data': q1_data.mean(), 'q1_data_min': q1_data.min(), 'q1_data_max': q1_data.max(), 
@@ -252,7 +261,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
             'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),'reward_min': jnp.concatenate(rewards, axis=0).min(),
             'bellman_error_data': bellman_error_data.mean(), 'bellman_error_rollout': bellman_error_rollout.mean(), 'bellman_error': bellman_error.mean(), 'expectile': expectile,
             'lambda': lamb.mean(), 'lambda_min': lamb.min(), 'lambda_max': lamb.max(),
-            'state_max': jnp.abs(states).max(),
+            'state_max': jnp.abs(states).max(), 'critic_reg_loss': critic_reg_loss,
         }
     
         if base_critic is not None:
@@ -261,7 +270,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
             'baseline_q_rollout': base_q_rollout.mean(), 'baseline_q_rollout_min': base_q_rollout.min(), 'baseline_q_rollout_max': base_q_rollout.max(),
             'clip_ratio_data': jnp.mean(clip_ratio_data), 'clip_ratio_rollout': jnp.mean(clip_ratio_rollout),
             }) 
-        return critic_loss, critic_info 
+        return critic_loss + critic_reg_loss, critic_info 
 
     new_critic, info = critic.apply_gradient(critic_loss_fn)
 

@@ -5,7 +5,8 @@ def get_config():
     config = ml_collections.ConfigDict()
 
     lr = 1e-4
-    config.actor_lr = lr
+    actor_lr = 3e-5
+    config.actor_lr = actor_lr
     config.alpha_lr = lr
     config.value_lr = lr
     config.critic_lr = lr
@@ -18,7 +19,7 @@ def get_config():
     config.temperature = 3.0
     config.dropout_rate = None
 
-    config.tau = 0.005  # For soft target updates.
+    config.tau = 0.02  # For soft target updates.
 
     ## World Model
     config.num_models = 7
