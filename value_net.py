@@ -14,7 +14,7 @@ class ValueCritic(nn.Module):
     @nn.compact
     def __call__(self, observations: jnp.ndarray) -> jnp.ndarray:
         observations = (observations - self.scaler[0]) / self.scaler[1]
-        critic = MLP((*self.hidden_dims, 1), use_norm=self.use_norm)(observations)
+        critic = MLP((*self.hidden_dims, 1), use_norm=self.use_norm, use_symlog=True)(observations)
         return jnp.squeeze(critic, -1)
 
 
@@ -30,7 +30,7 @@ class Critic(nn.Module):
         inputs = jnp.concatenate([observations, actions], -1)
         inputs = (inputs - self.scaler[0]) / self.scaler[1]
         critic = MLP((*self.hidden_dims, 1),
-                     activations=self.activations, use_norm=self.use_norm)(inputs)
+                     activations=self.activations, use_norm=self.use_norm, use_symlog=True)(inputs)
         return jnp.squeeze(critic, -1)
 
 
