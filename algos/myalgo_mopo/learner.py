@@ -250,18 +250,28 @@ class Learner(object):
             #model = DreamerV3WorldModel({'vector': obs_space}, {'action': act_space}, config, name='wm')
 
         if self.dynamics == 'torch':
-            mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
-            std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
-            scaler = (jnp.array(mu), jnp.array(std))
-            obs_scaler = (jnp.array(mu[:, :obs_dim]), jnp.array(std[:, :obs_dim]))
-
-            ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
-            ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
-            elites = ckpt['elites']
-
             self.termination_fn = get_termination_fn(task=env_name)
-            model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
-            model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
+            if True:
+                mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
+                std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
+                ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
+                ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
+                elites = ckpt['elites']
+                scaler = (jnp.array(mu), jnp.array(std))
+                model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
+                model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
+            else:
+                from dynamics.ensemble_model_learner import EffEnsembleDynamicModel
+                mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'mu.npy'))
+                std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'std.npy'))
+                ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'dynamics.pth'))
+                ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
+                elites = ckpt['elites']
+                scaler = (jnp.array(mu), jnp.array(std))
+                model_def = EnsembleWorldModel(40, 32, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
+                model_def = EffEnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
+
+            obs_scaler = (jnp.array(mu[:, :obs_dim]), jnp.array(std[:, :obs_dim]))
             model = Model.create(model_def, inputs=[model_key, model_key, observations, actions], tx=None)
 
             ckpt_jax = {}

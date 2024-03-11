@@ -103,6 +103,56 @@ class EnsembleLinear(nn.Module):
         x = x + self.bias
         return x
 
+class EffEnsembleDynamicModel(nn.Module):
+    model: nn.Module
+    scaler: Tuple[jnp.ndarray, jnp.ndarray]
+    reward_scaler: Tuple[float, float]
+    elites: jnp.ndarray
+    terminal_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
+    output_all: bool = False
+
+    def __call__(self,
+                 key: PRNGKey,
+                 observations: jnp.ndarray,
+                 actions: jnp.ndarray,
+                 training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+
+        z = jnp.concatenate([observations, actions], axis=1)
+        z = (z - self.scaler[0]) / self.scaler[1]
+        N, C = z.shape; E = self.elites.shape[0]; R = (N-1) // E + 1
+
+        if not self.output_all:
+            z = jnp.concatenate([z, jnp.zeros((E*R - N, C))], axis=0)
+            idxs = jax.random.permutation(key, E*R)
+            tmp = jnp.reshape(z[idxs], (E, R, C))
+            z = jnp.zeros((self.model.num_models, R, C)); z = z.at[self.elites].set(tmp)
+
+        mean, logvar = self.model(z)
+        std = jnp.sqrt(jnp.exp(logvar))
+        ensemble_samples = (mean + jax.random.normal(key, mean.shape) * std)
+
+        if not self.output_all:
+            Co = ensemble_samples.shape[-1]
+            result = ensemble_samples[self.elites].reshape((E*R, Co))
+            ensemble_samples = jnp.zeros((E*R, Co)); ensemble_samples.at[idxs].set(result)
+            ensemble_samples = ensemble_samples[:N]
+            samples = jnp.concatenate([ensemble_samples[:, :-1] + observations, ensemble_samples[:, -1:]], axis=1)
+            next_obs = samples[..., :-1]
+            reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
+            terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
+        else:
+            samples = jnp.concatenate([ensemble_samples[:, :, :-1] + observations[None], ensemble_samples[:, :, -1:]], axis=2)
+            next_obs = samples[..., :-1]
+            reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
+            terminal = self.terminal_fn(observations, actions, next_obs[0]).squeeze(1)
+
+        info = {}
+        info["raw_reward"] = reward
+
+        return next_obs, reward, terminal, info
+
+
+
 class EnsembleDynamicModel(nn.Module):
     model: nn.Module
     scaler: Tuple[jnp.ndarray, jnp.ndarray]
@@ -119,6 +169,7 @@ class EnsembleDynamicModel(nn.Module):
 
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
+        print(z.shape)
         #observations, actions = z[:, :observations.shape[1]], z[:, observations.shape[1]:]
         mean, logvar = self.model(z)
         mean = jnp.concatenate([mean[:, :, :-1] + observations[None, :, :], mean[:, :, -1:]], axis=2)
