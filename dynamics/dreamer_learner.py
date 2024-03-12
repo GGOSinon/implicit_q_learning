@@ -47,6 +47,7 @@ def _update_jit(
     a = batch['action']
     r = batch['reward']
     mask = 1.0 - batch['is_terminal']; done = batch['is_terminal']
+    mask = mask[:, :, None]
     #s, a, r, sN, mask = batch.observations, batch.actions, batch.rewards, batch.next_observations, batch.masks
     # s: [N, T, d_obs]
     # a: [N, T, d_act]
@@ -72,7 +73,7 @@ def _update_jit(
         loss_dyn = dyn_loss(post, prior)
         loss_rep = rep_loss(post, prior)
         
-        print(r.shape)
+        print(r.shape, mask.shape)
         loss_rew = -r_hat.log_prob(r)
         loss_cont = -cont_hat.log_prob(mask)
         loss_rec = -s_hat.log_prob(s)
@@ -135,26 +136,23 @@ class Learner(object):
         #                     tx=optimiser)
 
         if True:
+            import pprint
+            filename = dreamerv3.embodied.path.Path(f'./../dreamerv3_offline/logdir/{env_name}/checkpoint.ckpt')
+            ckpt = dreamerv3.embodied.basics.unpack(filename.read('rb'))
+
+            pprint.pprint(jax.tree_util.tree_map(jnp.shape, ckpt['agent']), width=1)
+
             model_def = WorldModel(model_hidden_dims, obs_dim, action_dim, training=True, dropout_rate=dropout_rate)
             model = Model.create(model_def,
                                  inputs=[model_key, rng, observations, actions, np.zeros_like(actions)[:, :, 0]],
                                  tx=optimiser)
-        else:
-            filename = path.Path('~/logdir/run1/checkpoint.ckpt')
-            ckpt = basics.unpack(filename.read('rb'))
-            parsed, other = dreamerv3.embodied.Flags(configs=['defaults']).parse_known(None)
-            print(parsed)
-            print(other)
-            config = dreamerv3.embodied.Config(dreamerv3.agent.Agent.configs['defaults'])
-            #for name in parsed.configs:
-            #    config = config.update(dreamerv3.Agent.configs[name])
-            #config = dreamerv3.embodied.Flags(config)
-            print(config)
+
+            pprint.pprint(jax.tree_util.tree_map(jnp.shape, model.params), width=1)
 
             config = dreamerv3.embodied.Config(dreamerv3.configs['defaults'])
             config = config.update(dreamerv3.configs['medium'])
             config = config.update({
-                'logdir': f'./logdir/{env_name}',
+                'logdir': f'./../dreamerv3_offline/logdir/{env_name}',
                 'run.log_every': 30,
                 'batch_size': 16,
                 'jax.prealloc': False,
@@ -163,11 +161,26 @@ class Learner(object):
                 'encoder.cnn_keys': '$^',
                 'decoder.cnn_keys': '$^',
             })
-            #config = dreamerv3.embodied.Flags(config).parse()
+
             env = from_gym.FromGym(env, obs_key='vector')
             env = dreamerv3.wrap_env(env, config)
             env = dreamerv3.embodied.BatchEnv([env], parallel=False)
-            model = DreamerV3WorldModel(env.obs_space, env.act_space, config, name='wm')
+
+            logdir = dreamerv3.embodied.Path(config.logdir)
+            step = dreamerv3.embodied.Counter()
+            replay = dreamerv3.embodied.replay.Uniform(config.batch_length, config.replay_size, logdir / 'replay')
+
+            ckpt = dreamerv3.embodied.Checkpoint() 
+            ckpt.step = step
+            ckpt.replay = replay
+            ckpt.agent = dreamerv3.Agent(env.obs_space, env.act_space, step, config)
+            ckpt.load(logdir / 'checkpoint.ckpt')
+
+            #config = dreamerv3.embodied.Flags(config).parse()
+            model_dreamer = ckpt.agent.wm #DreamerV3WorldModel(env.obs_space, env.act_space, config, name='wm')
+
+            print(model_dreamer)
+
 
         self.model = model
         self.rng = rng

@@ -169,7 +169,7 @@ class EnsembleDynamicModel(nn.Module):
 
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
-        print(z.shape)
+        #print(z.shape)
         #observations, actions = z[:, :observations.shape[1]], z[:, observations.shape[1]:]
         mean, logvar = self.model(z)
         mean = jnp.concatenate([mean[:, :, :-1] + observations[None, :, :], mean[:, :, -1:]], axis=2)

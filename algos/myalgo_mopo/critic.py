@@ -189,6 +189,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
     target_q_rollout = jnp.concatenate(target_q_rollout, axis=0)
     states = jnp.concatenate(states[:-1], axis=0)
     actions = jnp.concatenate(actions[:-1], axis=0)
+    rewards = jnp.concatenate(rewards, axis=0)
     loss_weights = jnp.concatenate(loss_weights[:-1], axis=0)
 
     #target_q_rollout = target_q_rollout.reshape(N, num_repeat)
@@ -249,6 +250,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
         critic_reg_loss_data = (q1_target_data - q1_data) ** 2 + (q2_target_data - q2_data) ** 2
         q1_target_rollout, q2_target_rollout = target_critic(states, actions)
         critic_reg_loss_rollout = (q1_target_rollout - q1_rollout) ** 2 + (q2_target_rollout - q2_rollout) ** 2
+        critic_reg_loss_rollout = critic_reg_loss_rollout * loss_weights
         critic_reg_loss = critic_reg_loss_data.mean() * (1 - model_batch_ratio) + critic_reg_loss_rollout.mean() * model_batch_ratio
 
         critic_info = {
@@ -258,10 +260,10 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
             'q1_rollout': q1_rollout.mean(), 'q1_rollout_min': q1_rollout.min(), 'q1_rollout_max': q1_rollout.max(), 'q1_adv': q1_rollout.mean() - q1_data.mean(),
             'q2_rollout': q2_rollout.mean(), 'q2_rollout_min': q2_rollout.min(), 'q2_rollout_max': q2_rollout.max(), 'q2_adv': q2_rollout.mean() - q2_data.mean(),
             'reward_data': data_batch.rewards.mean(), 'reward_data_max': data_batch.rewards.max(), 'reward_data_min': data_batch.rewards.min(),
-            'reward_model': jnp.concatenate(rewards, axis=0).mean(), 'reward_max': jnp.concatenate(rewards, axis=0).max(),'reward_min': jnp.concatenate(rewards, axis=0).min(),
+            'reward_model': (rewards * loss_weights).mean(), 'reward_max': (rewards * loss_weights).max(), 'reward_min': (rewards * loss_weights).min(),
             'bellman_error_data': bellman_error_data.mean(), 'bellman_error_rollout': bellman_error_rollout.mean(), 'bellman_error': bellman_error.mean(), 'expectile': expectile,
             'lambda': lamb.mean(), 'lambda_min': lamb.min(), 'lambda_max': lamb.max(),
-            'state_max': jnp.abs(states).max(), 'critic_reg_loss': critic_reg_loss,
+            'state_max': jnp.abs(states * loss_weights[:, None]).max(), 'critic_reg_loss': critic_reg_loss,
         }
     
         if base_critic is not None:
