@@ -104,23 +104,25 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
         for i in reversed(range(H)):
             q1, q2 = critic(states[i+1], actions[i+1])
             value_estimate = rewards[i] + discount * masks[i] * (lamb * value_estimate + (1-lamb) * jnp.minimum(q1, q2))
-            q_rollout.append(lamb * value_estimate + (1 - lamb) * q_values[i])
+            #q_rollout.append(lamb * value_estimate + (1 - lamb) * q_values[i])
+            q_rollout.append(value_estimate)
             loss_weights.append(jnp.where(value_estimate > q_values[i], expectile, 1-expectile)) 
         q_rollout = list(reversed(q_rollout))
         loss_weights = list(reversed(loss_weights))
 
+        q_values = jnp.stack(q_values[:-1], axis = 1)
         loss_weights = jnp.stack(loss_weights, axis=1) # [N, H]
         q_rollout = jnp.stack(q_rollout, axis=1) # [N, H] 
         log_probs = jnp.stack(log_probs[:-1], axis=1) # [N, H]
         policy_std = jnp.stack(policy_std[:-1], axis=1)
         weights = jnp.stack(weights[:-1], axis=1) # [N, H]
 
-        actor_loss = -q_rollout * loss_weights + sac_alpha * log_probs
+        actor_loss = -(lamb * loss_weights * q_rollout + (1-lamb) * q_values) + sac_alpha * log_probs
         actor_loss = (actor_loss * weights).mean()
         #actor_loss = -(q_rollout * weights).mean() + sac_alpha * log_probs.mean()
         #jax.debug.print('{x}, {y}', x=actor_loss, y=log_probs.mean())
 
-        return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
+        return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean(), 'adv_weights': (loss_weights * weights).mean() / weights.mean()}
 
     new_actor, info = actor.apply_gradient(actor_loss_fn)
     return new_actor, info

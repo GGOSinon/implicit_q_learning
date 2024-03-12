@@ -251,7 +251,7 @@ class Learner(object):
 
         if self.dynamics == 'torch':
             self.termination_fn = get_termination_fn(task=env_name)
-            if True:
+            if False:
                 mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
                 std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
                 ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))

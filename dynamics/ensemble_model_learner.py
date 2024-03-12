@@ -102,6 +102,7 @@ class EnsembleLinear(nn.Module):
             self.norm = nn.LayerNorm(epsilon=1e-05)
 
     def __call__(self, x: jnp.ndarray):
+        #print(x.shape, self.weight.shape)
         x = jnp.einsum('nbi,nij->nbj', x, self.weight)
         if self.use_norm: x = self.norm(x)
         else: x = x + self.bias
@@ -138,7 +139,7 @@ class EffEnsembleDynamicModel(nn.Module):
         if not self.output_all:
             Co = ensemble_samples.shape[-1]
             result = ensemble_samples[self.elites].reshape((E*R, Co))
-            ensemble_samples = jnp.zeros((E*R, Co)); ensemble_samples.at[idxs].set(result)
+            ensemble_samples = jnp.zeros((E*R, Co)); ensemble_samples = ensemble_samples.at[idxs].set(result)
             ensemble_samples = ensemble_samples[:N]
             samples = jnp.concatenate([ensemble_samples[:, :-1] + observations, ensemble_samples[:, -1:]], axis=1)
             next_obs = samples[..., :-1]
@@ -222,7 +223,8 @@ class EnsembleWorldModel(nn.Module):
                  training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
        
         #z = jnp.concatenate([observations, actions], axis=1)
-        z = z[None, :, :].repeat(self.num_models, axis=0)
+        if len(z.shape) == 2:
+            z = z[None, :, :].repeat(self.num_models, axis=0)
         for layer in self.layers:
             z = layer(z); z = nn.swish(z)
         z = self.last_layer(z)
