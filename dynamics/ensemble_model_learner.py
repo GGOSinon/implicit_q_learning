@@ -93,14 +93,18 @@ class EnsembleLinear(nn.Module):
     input_dim: int
     output_dim: int
     num_ensemble: int
+    use_norm: bool = False
 
     def setup(self):
         self.weight = self.param('kernel', nn.initializers.glorot_normal(), (self.num_ensemble, self.input_dim, self.output_dim))
         self.bias = self.param('bias', nn.initializers.glorot_normal(), (self.num_ensemble, 1, self.output_dim))
+        if self.use_norm:
+            self.norm = nn.LayerNorm(epsilon=1e-05)
 
     def __call__(self, x: jnp.ndarray):
         x = jnp.einsum('nbi,nij->nbj', x, self.weight)
-        x = x + self.bias
+        if self.use_norm: x = self.norm(x)
+        else: x = x + self.bias
         return x
 
 class EffEnsembleDynamicModel(nn.Module):
@@ -169,7 +173,7 @@ class EnsembleDynamicModel(nn.Module):
 
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
-        print(z.shape)
+        #print(z.shape)
         #observations, actions = z[:, :observations.shape[1]], z[:, observations.shape[1]:]
         mean, logvar = self.model(z)
         mean = jnp.concatenate([mean[:, :, :-1] + observations[None, :, :], mean[:, :, -1:]], axis=2)
@@ -203,10 +207,11 @@ class EnsembleWorldModel(nn.Module):
     obs_dim: int
     action_dim: int
     dropout_rate: Optional[float] = None
+    use_norm: bool = False
 
     def setup(self):
         hidden_dims = (self.obs_dim+self.action_dim,) + self.hidden_dims
-        self.layers = [EnsembleLinear(hidden_dims[i-1], hidden_dims[i], self.num_models) for i in range(1, len(hidden_dims))]
+        self.layers = [EnsembleLinear(hidden_dims[i-1], hidden_dims[i], self.num_models, self.use_norm) for i in range(1, len(hidden_dims))]
         self.last_layer = EnsembleLinear(self.hidden_dims[-1], 2 * (self.obs_dim + 1), self.num_models)
         self.min_logvar = self.param('min_logvar', jax.nn.initializers.constant(-10), (self.obs_dim+1,))
         self.max_logvar = self.param('max_logvar', jax.nn.initializers.constant(0.5), (self.obs_dim+1,))

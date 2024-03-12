@@ -25,6 +25,7 @@ import orbax.checkpoint
 from dataset_utils import D4RLDataset, NeoRLDataset, split_into_trajectories, ReplayBuffer
 from evaluation import evaluate, take_video
 from algos.myalgo_mopo.learner import Learner
+#from algos.myalgo_dreamer.learner import Learner
 
 FLAGS = flags.FLAGS
 
@@ -50,7 +51,7 @@ flags.DEFINE_float('temp_explore', 1.0, 'Temperature for exploration.')
 flags.DEFINE_float('expectile', None, 'Expectile for Q estimation')
 flags.DEFINE_float('expectile_policy', 0.5, 'Expectile for V estimation')
 #flags.DEFINE_float('sac_alpha', 0.2, 'SAC alpha.')
-flags.DEFINE_float('model_batch_ratio', 0.5, 'Model-data batch ratio.')
+flags.DEFINE_float('model_batch_ratio', 0.95, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
