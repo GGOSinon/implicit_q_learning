@@ -168,6 +168,7 @@ def main(_):
             "use_baseline": FLAGS.baseline,
             "model_batch_ratio": FLAGS.model_batch_ratio,
             "discount": FLAGS.discount,
+            "rollout_retain": FLAGS.rollout_retain,
 	},
     )
 
@@ -188,8 +189,8 @@ def main(_):
         eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
     agent = Learner(FLAGS.seed,
-                    env.observation_space.sample()[np.newaxis],
-                    env.action_space.sample()[np.newaxis],
+                    np.repeat(env.observation_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
+                    np.repeat(env.action_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
                     max_steps=FLAGS.max_steps,
                     dynamics_name=FLAGS.dynamics,
                     env_name=FLAGS.env_name,
@@ -276,9 +277,9 @@ def main(_):
             for k, v in eval_stats.items():
                 if k == 'return':
                     v = env.get_normalized_score(v)
-                summary_writer.add_scalar(f'evaluation/average_{k}s', v, i)
+                #summary_writer.add_scalar(f'evaluation/average_{k}s', v, i)
                 run.log({f'evaluation/average_{k}s': v}, step=i)
-            summary_writer.flush()
+            #summary_writer.flush()
 
             eval_returns.append((i, env.get_normalized_score(eval_stats['return'])))
             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),

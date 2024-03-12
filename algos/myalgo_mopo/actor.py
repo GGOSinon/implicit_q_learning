@@ -114,7 +114,10 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
         log_probs = jnp.stack(log_probs[:-1], axis=1) # [N, H]
         policy_std = jnp.stack(policy_std[:-1], axis=1)
         weights = jnp.stack(weights[:-1], axis=1) # [N, H]
-        actor_loss = -(q_rollout * weights).mean() + sac_alpha * log_probs.mean()
+
+        actor_loss = -q_rollout * loss_weights + sac_alpha * log_probs
+        actor_loss = (actor_loss * weights).mean()
+        #actor_loss = -(q_rollout * weights).mean() + sac_alpha * log_probs.mean()
         #jax.debug.print('{x}, {y}', x=actor_loss, y=log_probs.mean())
 
         return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean()}
