@@ -74,7 +74,7 @@ def _update_jit(
 
         new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
                                            data_batch, model_batch, model_batch_ratio,
-                                           discount, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
+                                           discount, temperature, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
     
     else:
         new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
@@ -100,7 +100,7 @@ def _update_jit(
     if baseline == 'iql':
         new_baseline_critic, baseline_critic_info = update_iql_q(baseline_critic, baseline_value, data_batch, discount)
         new_baseline_value, baseline_value_info = update_iql_v(target_baseline_critic, baseline_value, data_batch, 0.5)
-        new_baseline_actor = update_iql_actor(key3, baseline_actor, baseline_critic, baseline_value, data_batch, temperature) 
+        new_baseline_actor = update_iql_actor(key3, baseline_actor, baseline_critic, baseline_value, data_batch, 3.0) 
         baseline_info = {**baseline_critic_info, **baseline_value_info}
         baseline_info = {'iql_'+k: v for (k, v) in baseline_info.items()}
         new_target_baseline_critic = target_update(baseline_critic, target_baseline_critic, tau)
@@ -144,7 +144,7 @@ class Learner(object):
                  tau: float = 0.005,
                  expectile: float = 0.1,
                  expectile_policy: float = 0.1,
-                 temperature: float = 0.1,
+                 temperature: float = 1.0,
                  dropout_rate: Optional[float] = None,
                  max_steps: Optional[int] = None,
                  opt_decay_schedule: str = "cosine",

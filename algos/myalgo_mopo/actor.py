@@ -74,7 +74,7 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
     num_repeat = 1; N = batch.observations.shape[0]
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         Robs = batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
-        dist = actor.apply({'params': actor_params}, Robs, training=True, rngs={'dropout': key})
+        dist = actor.apply({'params': actor_params}, Robs, temperature, training=True, rngs={'dropout': key})
         Ra = dist.sample(seed=key); log_prob = dist.log_prob(Ra)
         states, rewards, actions, masks, log_probs, dists, weights = [Robs], [], [Ra], [], [log_prob], [dist], [jnp.ones(N*num_repeat)]
         keys = [key]
@@ -85,7 +85,7 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
             s, a = states[-1], actions[-1]
             rng1, rng2, rng3, key0 = jax.random.split(keys[-1], 4); keys.append(key0)
             s_next, rew, terminal, _ = model(rng1, s, a)
-            dist = actor.apply({'params': actor_params}, s_next, training=True)
+            dist = actor.apply({'params': actor_params}, s_next, temperature, training=True)
             a_next = dist.sample(seed=rng2); log_prob = dist.log_prob(a_next)
             q1, q2 = critic(s_next, a_next); q_values.append(jnp.minimum(q1, q2))
             states.append(s_next)

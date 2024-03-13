@@ -91,20 +91,20 @@ def update_q_baseline(key: PRNGKey, critic: Model, target_critic: Model, actor: 
 # COMBO
 def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, model: Model,
              data_batch: Batch, model_batch: Batch, model_batch_ratio: float,
-             discount: float, lamb: float, H: int, expectile: float, base_critic: Model, num_repeat: int) -> Tuple[Model, Model, InfoDict]:
+             discount: float, temperature: float, lamb: float, H: int, expectile: float, base_critic: Model, num_repeat: int) -> Tuple[Model, Model, InfoDict]:
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
  
     N = model_batch.observations.shape[0]
     Robs = model_batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
     #Ra = model_batch.actions[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
-    Ra = actor(Robs).sample(seed=key1)
+    Ra = actor(Robs, temperature).sample(seed=key1)
     states, rewards, actions, masks = [Robs], [], [Ra], []
     for i in range(H):
         s, a = states[-1], actions[-1]
         rng1, rng2, key1 = jax.random.split(key1, 3)
         s_next, rew, terminal, _ = model(rng2, s, a)
-        a_next = actor(s_next).sample(seed=rng1)
+        a_next = actor(s_next, temperature).sample(seed=rng1)
         states.append(s_next)
         actions.append(a_next)
         rewards.append(rew)
@@ -195,7 +195,7 @@ def update_q(key: PRNGKey, critic: Model, target_critic: Model, actor: Model, mo
     #target_q_rollout = target_q_rollout.reshape(N, num_repeat)
     #target_q_rollout = jnp.take_along_axis(target_q_rollout, jnp.argmin(target_q_rollout, axis=1)[:, None], axis=1).squeeze(1)
 
-    next_a = actor(data_batch.next_observations).sample(seed=key1)
+    next_a = actor(data_batch.next_observations, temperature).sample(seed=key1)
     next_q1, next_q2 = critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
     #next_q1, next_q2 = target_critic(data_batch.next_observations, next_a); next_value = jnp.minimum(next_q1, next_q2)
     if base_critic is not None:
