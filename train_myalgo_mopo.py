@@ -188,6 +188,7 @@ def main(_):
     else:
         eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
 
+    print("Finished loading dataset")
     agent = Learner(FLAGS.seed,
                     np.repeat(env.observation_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
                     np.repeat(env.action_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),

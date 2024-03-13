@@ -75,8 +75,8 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         Robs = batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
         dist = actor.apply({'params': actor_params}, Robs, temperature, training=True, rngs={'dropout': key})
-        Ra = dist.sample(seed=key); log_prob = dist.log_prob(Ra)
-        states, rewards, actions, masks, log_probs, dists, weights = [Robs], [], [Ra], [], [log_prob], [dist], [jnp.ones(N*num_repeat)]
+        Ra = dist.sample(seed=key) 
+        states, rewards, actions, masks, weights = [Robs], [], [Ra], [], [jnp.ones(N*num_repeat)]
         keys = [key]
 
         q_values = []
@@ -86,17 +86,13 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
             rng1, rng2, rng3, key0 = jax.random.split(keys[-1], 4); keys.append(key0)
             s_next, rew, terminal, _ = model(rng1, s, a)
             dist = actor.apply({'params': actor_params}, s_next, temperature, training=True)
-            a_next = dist.sample(seed=rng2); log_prob = dist.log_prob(a_next)
+            a_next = dist.sample(seed=rng2) 
             q1, q2 = critic(s_next, a_next); q_values.append(jnp.minimum(q1, q2))
             states.append(s_next)
             actions.append(a_next)
             rewards.append(rew)
             masks.append(1 - terminal)
-            log_probs.append(log_prob)
-            dists.append(dist)
             weights.append(weights[-1] * masks[-1] * discount)
-
-        policy_std = [dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag for dist in dists]
 
         q_rollout, loss_weights = [], []
         q1, q2 = critic(states[-1], actions[-1])
@@ -109,6 +105,15 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
             loss_weights.append(jnp.where(value_estimate > q_values[i], expectile, 1-expectile)) 
         q_rollout = list(reversed(q_rollout))
         loss_weights = list(reversed(loss_weights))
+
+        dists, log_probs = [], []
+        for i in range(H+1):
+            dist = actor.apply({'params': actor_params}, states[i], training=True)
+            action = dist.sample(seed=keys[i])
+            dists.append(dist)
+            log_probs.append(dist.log_prob(action))
+
+        policy_std = [dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag for dist in dists]
 
         q_values = jnp.stack(q_values[:-1], axis = 1)
         loss_weights = jnp.stack(loss_weights, axis=1) # [N, H]
