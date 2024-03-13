@@ -78,7 +78,8 @@ def _sample_actions(rng: PRNGKey,
                     actor: Model,
                     observations: np.ndarray,
                     temperature: float = 1.0) -> Tuple[PRNGKey, jnp.ndarray]:
-    dist = actor(observations)
+    #jax.debug.print('{x}', x=temperature)
+    dist = actor(observations, temperature)
     rng, key = jax.random.split(rng)
     return rng, dist.sample(seed=key)
 

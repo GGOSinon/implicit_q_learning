@@ -74,7 +74,7 @@ def _update_jit(
 
         new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
                                            data_batch, model_batch, model_batch_ratio,
-                                           discount, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
+                                           discount, temperature, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
     
     else:
         new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
