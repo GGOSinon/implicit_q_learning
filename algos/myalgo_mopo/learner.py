@@ -251,7 +251,8 @@ class Learner(object):
 
         if self.dynamics == 'torch':
             self.termination_fn = get_termination_fn(task=env_name)
-            if False:
+            if True:
+                from dynamics.ensemble_model_learner import EffEnsembleDynamicModel
                 mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
                 std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
                 ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
@@ -259,7 +260,7 @@ class Learner(object):
                 elites = ckpt['elites']
                 scaler = (jnp.array(mu), jnp.array(std))
                 model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
-                model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
+                model_def = EffEnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
             else:
                 from dynamics.ensemble_model_learner import EffEnsembleDynamicModel
                 mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'mu.npy'))
@@ -314,7 +315,7 @@ class Learner(object):
         tau_model_def = policy.SACalpha(init_value = inverse_sigmoid(expectile)) 
         tau_model = Model.create(tau_model_def, inputs=[alpha_key], tx=optax.adam(learning_rate=1e-2))
 
-        critic_def = value_net.DoubleCritic(scaler, hidden_dims)
+        critic_def = value_net.DoubleCritic(scaler, hidden_dims, use_norm=True)
         critic_opt = optax.adam(learning_rate=value_lr)
         critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = critic_opt)
 
