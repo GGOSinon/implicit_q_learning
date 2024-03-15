@@ -54,7 +54,7 @@ class NormalTanhPolicy(nn.Module):
                                     self.log_std_scale))(outputs)
         else:
             log_stds = self.param('log_stds', nn.initializers.zeros,
-                                  (self.action_dim, ))
+                                  (1, self.action_dim))
 
         log_std_min = self.log_std_min or LOG_STD_MIN
         log_std_max = self.log_std_max or LOG_STD_MAX

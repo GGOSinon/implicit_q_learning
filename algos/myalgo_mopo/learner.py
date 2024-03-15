@@ -253,6 +253,7 @@ class Learner(object):
         if self.dynamics == 'torch':
             self.termination_fn = get_termination_fn(task=env_name)
             if True:
+                from dynamics.ensemble_model_learner import EffEnsembleDynamicModel
                 mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
                 std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
                 ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
@@ -260,7 +261,7 @@ class Learner(object):
                 elites = ckpt['elites']
                 scaler = (jnp.array(mu), jnp.array(std))
                 model_def = EnsembleWorldModel(num_models, num_elites, model_hidden_dims, obs_dim, action_dim, dropout_rate=None)
-                model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
+                model_def = EffEnsembleDynamicModel(model_def, scaler, reward_scaler, elites, self.termination_fn)
             else:
                 from dynamics.ensemble_model_learner import EffEnsembleDynamicModel
                 mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'mu.npy'))
@@ -294,7 +295,7 @@ class Learner(object):
                                             log_std_scale=1e-3,
                                             log_std_min=-5.0,
                                             dropout_rate=dropout_rate,
-                                            state_dependent_std=True,
+                                            state_dependent_std=False,
                                             tanh_squash_distribution=True)
 
         if opt_decay_schedule == "cosine":
