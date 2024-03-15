@@ -70,7 +70,8 @@ def _update_jit(
         #                                         model_batch, discount, temperature, alpha)
         #new_actor, actor_info = reinforce_update_actor(key, actor, target_critic, new_value, model,
         #                                         model_batch, discount, temperature, alpha)
-        new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
+        #new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
+        new_alpha, alpha_info = update_alpha(key2, actor_info['log_probs'], sac_alpha, target_entropy)
 
         new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
                                            data_batch, model_batch, model_batch_ratio,
@@ -251,7 +252,7 @@ class Learner(object):
 
         if self.dynamics == 'torch':
             self.termination_fn = get_termination_fn(task=env_name)
-            if False:
+            if True:
                 mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
                 std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
                 ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
@@ -314,7 +315,7 @@ class Learner(object):
         tau_model_def = policy.SACalpha(init_value = inverse_sigmoid(expectile)) 
         tau_model = Model.create(tau_model_def, inputs=[alpha_key], tx=optax.adam(learning_rate=1e-2))
 
-        critic_def = value_net.DoubleCritic(scaler, hidden_dims)
+        critic_def = value_net.DoubleCritic(scaler, hidden_dims, use_norm=True)
         critic_opt = optax.adam(learning_rate=value_lr)
         critic = Model.create(critic_def, inputs=[critic_key, observations, actions], tx = critic_opt)
 

@@ -43,8 +43,8 @@ class NormalTanhPolicy(nn.Module):
         observations = (observations - self.scaler[0]) / self.scaler[1]
         outputs = MLP(self.hidden_dims,
                       activate_final=True,
-                      dropout_rate=self.dropout_rate)(observations,
-                                                      training=training)
+                      dropout_rate=self.dropout_rate,
+                      use_symlog=True)(observations, training=training)
 
         means = nn.Dense(self.action_dim, kernel_init=default_init())(outputs)
 
