@@ -16,7 +16,7 @@ def get_config():
     #config.discount = 0.99
 
     #config.expectile = 0.3  # The actual tau for expectiles.
-    config.temperature = 1.0
+    config.temperature = 0.0
     config.dropout_rate = None
 
     config.tau = 0.02  # For soft target updates.

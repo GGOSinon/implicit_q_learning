@@ -115,6 +115,7 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
 
         policy_std = [dist.scale.diag if hasattr(dist, 'scale') else dist.distribution.scale.diag for dist in dists]
 
+        actions = jnp.stack(actions, axis=1)
         q_values = jnp.stack(q_values[:-1], axis = 1)
         loss_weights = jnp.stack(loss_weights, axis=1) # [N, H]
         q_rollout = jnp.stack(q_rollout, axis=1) # [N, H] 
@@ -127,7 +128,13 @@ def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
         #actor_loss = -(q_rollout * weights).mean() + sac_alpha * log_probs.mean()
         #jax.debug.print('{x}, {y}', x=actor_loss, y=log_probs.mean())
 
-        return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout, 'policy_std': policy_std.mean(), 'log_probs': log_probs.mean(), 'adv_weights': (loss_weights * weights).mean() / weights.mean()}
+        #print(log_probs.shape, weights.shape, policy_std.shape, loss_weights.shape)
+        return actor_loss, {'actor_loss': actor_loss, 'q_rollout': q_rollout,
+                            'policy_std': (policy_std * weights[:, :, None]).mean() / weights.mean(),
+                            'log_probs': (log_probs * weights).mean() / weights.mean(),
+                            'adv_weights': (loss_weights * weights).mean() / weights.mean(),
+                            'abs_actions': jnp.abs(actions).mean()
+                            }
 
     new_actor, info = actor.apply_gradient(actor_loss_fn)
     return new_actor, info
@@ -255,7 +262,18 @@ def update_all(key: PRNGKey, actor: Model, critic: Model, target_critic: Model, 
 
     return new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info
 
-def update_alpha(key: PRNGKey, actor: Model, sac_alpha: Model,
+def update_alpha(key: PRNGKey, log_probs: jnp.ndarray, sac_alpha: Model, target_entropy: float) -> Tuple[Model, InfoDict]:
+    log_probs = log_probs + target_entropy
+    def alpha_loss_fn(alpha_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
+        log_alpha = sac_alpha.apply({'params': alpha_params})
+        alpha_loss = -(log_alpha * log_probs).mean()
+        return alpha_loss, {'alpha_loss': alpha_loss, 'alpha': jnp.exp(log_alpha)}
+
+    new_alpha, info = sac_alpha.apply_gradient(alpha_loss_fn)
+
+    return new_alpha, info
+
+def _update_alpha(key: PRNGKey, actor: Model, sac_alpha: Model,
         batch: Batch, target_entropy: float) -> Tuple[Model, InfoDict]:
 
     dist = actor(batch.observations); a = dist.sample(seed=key)
