@@ -169,6 +169,11 @@ def termination_fn_neorl_walker2d(obs, act, next_obs):
     done = np.logical_not(is_healthy).reshape(-1, 1)
     return done
 
+def termination_fn_kitchen(obs, act, next_obs):
+    done = np.array([False] * obs.shape[0])
+    done = done[:, None]
+    return done
+
 def get_termination_fn(task):
     if 'halfcheetahvel' in task:
         return termination_fn_halfcheetahveljump
@@ -211,5 +216,7 @@ def get_termination_fn(task):
         return termination_fn_neorl_hopper
     elif 'Walker2d' in task:
         return termination_fn_neorl_walker2d
+    elif 'kitchen' in task:
+        return termination_fn_kitchen
     else:
         raise np.zeros
