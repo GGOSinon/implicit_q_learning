@@ -43,7 +43,7 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 def _update_jit(
         rng: PRNGKey, actor: Model, baseline_actor: Model, sac_alpha: Model, critic: Model, baseline_critic: Model, baseline_value: Model, target_critic: Model, target_baseline_critic: Model, model: Model, tau_model: Model,
         data_batch: Batch, model_batch: Batch, model_batch_ratio: float, discount: float, tau: float,  
-        expectile: float, cql_weight: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int, num_actor_updates: int, baseline: str, num_repeat: int,
+        expectile: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int, num_actor_updates: int, baseline: str, num_repeat: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
     
     log_alpha = sac_alpha(); alpha = jnp.exp(log_alpha)
@@ -75,7 +75,7 @@ def _update_jit(
 
         new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
                                            data_batch, model_batch, model_batch_ratio,
-                                           discount, temperature, cql_weight, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
+                                           discount, temperature, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
     
     else:
         new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
@@ -158,7 +158,6 @@ class Learner(object):
                  num_actor_updates: int = None,
                  baseline: str = None,
                  num_repeat: int = None,
-                 cql_weight: float = 0.0,
                  #sac_alpha: float = 0.2,
                  **kwargs):
         """
@@ -179,7 +178,6 @@ class Learner(object):
         self.num_actor_updates = num_actor_updates
         self.num_repeat = num_repeat
         self.baseline = baseline
-        self.cql_weight = cql_weight
         #self.sac_alpha = sac_alpha
 
         rng = jax.random.PRNGKey(seed)
@@ -415,7 +413,7 @@ class Learner(object):
         new_rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, info = _update_jit(
             self.rng, self.actor, self.baseline_actor, self.alpha, self.critic, self.baseline_critic, self.baseline_value, self.target_critic, self.target_baseline_critic, self.model, self.tau_model,
             data_batch, model_batch, model_batch_ratio, self.discount, self.tau,
-            self.expectile, self.cql_weight, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates, self.baseline, self.num_repeat)
+            self.expectile, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates, self.baseline, self.num_repeat)
 
         self.rng = new_rng
         self.actor = new_actor
