@@ -205,7 +205,7 @@ class Learner(object):
                 'decoder.mlp_keys': 'vector',
             })
             logdir = dreamerv3.embodied.Path(config.logdir) 
-            #config = embodied.Flags(config).parse()
+            #rconfig = embodied.Flags(config).parse()
 
             env = gym.make(env_name)
             env = from_gym.FromGym(env, obs_key='vector')
@@ -254,9 +254,15 @@ class Learner(object):
             self.termination_fn = get_termination_fn(task=env_name)
             if True:
                 from dynamics.ensemble_model_learner import EffEnsembleDynamicModel
-                mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
-                std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
-                ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
+                if 1 <= seed and seed <= 3:
+                    print("TESTING SEEDS!")
+                    mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', str(seed), env_name, 'mu.npy'))
+                    std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', str(seed), env_name, 'std.npy'))
+                    ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', str(seed), env_name, 'dynamics.pth'))
+                else:
+                    mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'mu.npy'))
+                    std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'std.npy'))
+                    ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', env_name, 'dynamics.pth'))
                 ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
                 elites = ckpt['elites']
                 scaler = (jnp.array(mu), jnp.array(std))

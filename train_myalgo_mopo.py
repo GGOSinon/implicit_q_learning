@@ -169,6 +169,7 @@ def main(_):
             "model_batch_ratio": FLAGS.model_batch_ratio,
             "discount": FLAGS.discount,
             "rollout_retain": FLAGS.rollout_retain,
+            "lamb": FLAGS.lamb,
 	},
     )
 
