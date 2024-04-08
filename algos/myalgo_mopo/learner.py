@@ -63,7 +63,7 @@ def _update_jit(
         new_actor = actor
         for _ in range(num_actor_updates):
             new_actor, actor_info = gae_update_actor(key, new_actor, critic, model,
-                                                     model_batch, discount, temperature, alpha, lamb, horizon_length, expectile)
+                                                     model_batch, discount, temperature, alpha, lamb, horizon_length, expectile, num_repeat)
             #new_actor, actor_info = update_actor(key, new_actor, critic, model,
             #                                     mix_batch, discount, temperature, alpha)
         #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
@@ -192,7 +192,16 @@ class Learner(object):
             model = Model.create(model_def, inputs=[model_key, observations, actions], tx=None)
         if self.dynamics == 'oracle':
             model = MujocoOracleDynamics(env)
-        if self.dynamics == 'dreamer':
+
+        if self.dynamics == 'dreamerv2':
+            task, diff = env_name.split('-')
+            ckpt_path = f'/scratch/william202/projects/dreamerv2-EP/models/{task}/{diff}/{seed}/final_model.pkl'
+            with open(ckpt_path, 'rb') as F:
+                ckpt = pkl.load(F)
+            print(ckpt)
+            print(ckpt.keys())
+
+        if self.dynamics == 'dreamerv3':
             import dreamerv3
             import dreamerv3.embodied
             from dreamerv3.embodied.envs import from_gym

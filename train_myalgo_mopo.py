@@ -96,11 +96,17 @@ def normalize(dataset):
 def make_env_and_dataset(env_name,
                          seed, discount) -> Tuple[gym.Env, D4RLDataset]:
 
-    is_neorl = env_name.split('-')[1] == 'v3' 
+    is_neorl = env_name.split('-')[1] == 'v3'
+    is_dmc = 'walker_walk' in env_name or 'humanoid_walk' in env_name or 'cheetah_run' in env_name
     if is_neorl:
         import neorl
         task, version, data_type = tuple(env_name.split("-"))
         env = neorl.make(task+'-'+version)
+    elif is_dmc:
+        import common
+        task, diff = env_name.split('-')
+        env = common.DMC(task, config.action_repeat, config.render_size, config.dmc_camera)
+        env = common.NormalizeAction(env)
     else:
         env = gym.make(env_name)
 
@@ -113,6 +119,8 @@ def make_env_and_dataset(env_name,
 
     if is_neorl:
         dataset = NeoRLDataset(env, data_type, discount)
+    elif is_dmc:
+        dataset = DMCDataset(task, diff, discount)
     else:
         dataset = D4RLDataset(env, discount)
 

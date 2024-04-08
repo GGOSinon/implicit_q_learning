@@ -69,9 +69,9 @@ def awr_update_actor(key: PRNGKey, actor: Model, critic: Model, value: Model, mo
 
 def gae_update_actor(key: PRNGKey, actor: Model, critic: Model, model: Model,
         batch: Batch,
-        discount: float, temperature: float, sac_alpha: float, lamb: float, H: int, expectile: float) -> Tuple[Model, InfoDict]:
+        discount: float, temperature: float, sac_alpha: float, lamb: float, H: int, expectile: float, num_repeat: int) -> Tuple[Model, InfoDict]:
 
-    num_repeat = 1; N = batch.observations.shape[0]
+    N = batch.observations.shape[0]
     def actor_loss_fn(actor_params: Params) -> Tuple[jnp.ndarray, InfoDict]:
         Robs = batch.observations[:, None, :].repeat(repeats=num_repeat, axis=1).reshape(N * num_repeat, -1)
         dist = actor.apply({'params': actor_params}, Robs, temperature, training=True, rngs={'dropout': key})
