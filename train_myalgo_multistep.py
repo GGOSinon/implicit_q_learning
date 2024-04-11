@@ -22,19 +22,20 @@ import pickle as pkl
 import wandb
 import wrappers
 import orbax.checkpoint
-from dataset_utils import D4RLDataset, NeoRLDataset, split_into_trajectories, ReplayBuffer
+from dataset_utils import D4RLTimeDataset, D4RLDataset, NeoRLDataset, split_into_trajectories, ReplayBuffer, ReplayTimeBuffer
 from evaluation import evaluate, take_video
-from algos.myalgo_mopo.learner import Learner
+from algos.myalgo_iql.learner import Learner
 #from algos.myalgo_dreamer.learner import Learner
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('env_name', 'antmaze-medium-play-v0', 'Environment name.')
 flags.DEFINE_string('load_dir', None, 'Dynamics model load dir')
-flags.DEFINE_string('save_dir', './tmp/EP/', 'Tensorboard logging dir.')
+flags.DEFINE_string('save_dir', './tmp/', 'Tensorboard logging dir.')
 flags.DEFINE_string('wandb_key', '', 'Wandb key')
 flags.DEFINE_string('dynamics', 'torch', 'Dynamics model')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
+flags.DEFINE_integer('T', 16, 'Batch rollout size')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
 flags.DEFINE_integer('num_layers', 3, 'number of hidden layers')
@@ -42,7 +43,7 @@ flags.DEFINE_integer('layer_size', 256, 'layer size')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('video_interval', 50000, 'Eval interval.')
-flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
+flags.DEFINE_integer('batch_size', 64, 'Mini batch size.')
 flags.DEFINE_float('discount', 0.99, 'discount')
 flags.DEFINE_float('lamb', 0.95, 'lambda for GAE')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
@@ -55,7 +56,7 @@ flags.DEFINE_float('model_batch_ratio', 0.95, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
-flags.DEFINE_integer('num_repeat', 1, 'Number of rollouts')
+flags.DEFINE_integer('num_repeat', 10, 'Number of rollouts')
 flags.DEFINE_integer('rollout_retain', 5, 'Rollout retain')
 flags.DEFINE_integer('horizon_length', 5, 'Value estimation length.')
 flags.DEFINE_integer('num_actor_updates', 1, 'Number of actor updates')
@@ -102,7 +103,6 @@ def make_env_and_dataset(env_name,
         import neorl
         task, version, data_type = tuple(env_name.split("-"))
         env = neorl.make(task+'-'+version)
-        raw_dataset = env.get_dataset()
     elif is_dmc:
         import common
         task, diff = env_name.split('-')
@@ -110,7 +110,6 @@ def make_env_and_dataset(env_name,
         env = common.NormalizeAction(env)
     else:
         env = gym.make(env_name)
-        raw_dataset = env.get_dataset()
 
     env = wrappers.EpisodeMonitor(env)
     env = wrappers.SinglePrecision(env)
@@ -121,17 +120,19 @@ def make_env_and_dataset(env_name,
 
     if is_neorl:
         dataset = NeoRLDataset(env, data_type, discount)
+        raw_dataset = env.get_dataset()
     elif is_dmc:
         dataset = DMCDataset(task, diff, discount)
     else:
-        dataset = D4RLDataset(env, discount)
+        dataset = D4RLTimeDataset(env, FLAGS.T, discount)
+        raw_dataset = env.get_dataset()
 
     env_name = FLAGS.env_name.lower()
 
     if 'antmaze' in env_name:
         #dataset.rewards -= 1.0
-        dataset.rewards = dataset.rewards * 10 - 5.
-        reward_scale, reward_bias = 10., -5.
+        dataset.rewards = dataset.rewards * 1 - 1.
+        reward_scale, reward_bias = 1., -1.
         # See https://github.com/aviralkumar2907/CQL/blob/master/d4rl/examples/cql_antmaze_new.py#L22
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
     elif ('halfcheetah' in env_name or 'walker2d' in env_name
@@ -199,12 +200,12 @@ def main(_):
     elif 'antmaze' in FLAGS.env_name:
         eval_envs = []
         for i in range(FLAGS.eval_episodes): 
-            env = gym.make(FLAGS.env_name) 
-            env = wrappers.EpisodeMonitor(env) 
-            env = wrappers.SinglePrecision(env)   
-            seed = FLAGS.seed + i 
+            env = gym.make(FLAGS.env_name)
+            env = wrappers.EpisodeMonitor(env)
+            env = wrappers.SinglePrecision(env)
+            seed = FLAGS.seed + i
             env.seed(seed)
-            env.action_space.seed(seed) 
+            env.action_space.seed(seed)
             env.observation_space.seed(seed) 
             eval_envs.append(env)
     else:
@@ -253,7 +254,7 @@ def main(_):
         raw_restored = orbax_checkpointer.restore(file_dir)
         agent.model = agent.model.replace(params = raw_restored['model'])
 
-    rollout_dataset = ReplayBuffer(env.observation_space, env.action_space.shape[0], capacity=FLAGS.rollout_retain*FLAGS.rollout_length*FLAGS.rollout_batch_size)
+    rollout_dataset = ReplayTimeBuffer(env.observation_space, env.action_space.shape[0], capacity=FLAGS.rollout_retain*FLAGS.rollout_length*FLAGS.rollout_batch_size, T=FLAGS.T)
 
     #model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
     #data_batch_size = FLAGS.batch_size - model_batch_size
@@ -298,7 +299,7 @@ def main(_):
                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         '''
 
-        if i % FLAGS.eval_interval == 0:
+        if i % FLAGS.eval_interval == 0: 
             eval_stats = evaluate(FLAGS.seed, agent, eval_envs, video_path, i)
             q1, q2 = agent.critic(raw_dataset['observations'][::10], raw_dataset['actions'][::10])
             q_dataset = np.minimum(q1, q2)
@@ -315,7 +316,7 @@ def main(_):
             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),
                        eval_returns,
                        fmt=['%d', '%.1f'])
-
+            
             params = {'actor': agent.actor.params,
                       'critic': agent.critic.params}
             with open(os.path.join(model_path, f'{FLAGS.seed}_{i}.pkl'), 'wb') as F:

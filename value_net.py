@@ -47,4 +47,4 @@ class DoubleCritic(nn.Module):
                          activations=self.activations, use_norm=self.use_norm)(observations, actions)
         critic2 = Critic(self.scaler, self.hidden_dims,
                          activations=self.activations, use_norm=self.use_norm)(observations, actions)
-        return critic1, critic2
+        return critic1, critic1

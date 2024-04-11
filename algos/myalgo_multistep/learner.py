@@ -12,10 +12,10 @@ import torch
 
 import policy
 import value_net
-from algos.myalgo_mopo.actor import reinforce_update_actor, awr_update_actor, update_actor, gae_update_actor, update_alpha, update_all
+from .actor import reinforce_update_actor, awr_update_actor, update_actor, gae_update_actor, update_alpha, update_all, ms_update_actor
 from common import Batch, InfoDict, Model, PRNGKey, inverse_sigmoid
 #from algos.myalgo_nstep.critic import update_q, update_v, update_tau_model
-from algos.myalgo_mopo.critic import update_q, update_v, update_tau_model, update_q_baseline
+from .critic import update_q, update_v, update_tau_model, update_q_baseline
 from algos.iql.critic import update_q as update_iql_q, update_v as update_iql_v
 from algos.iql.actor import update_actor as update_iql_actor
 from algos.cql.critic import update_q as update_cql_q
@@ -41,7 +41,7 @@ def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
 
 @partial(jax.jit, static_argnames=['max_q_backup', 'horizon_length', 'num_actor_updates', 'baseline', 'num_repeat'])
 def _update_jit(
-        rng: PRNGKey, actor: Model, baseline_actor: Model, sac_alpha: Model, critic: Model, baseline_critic: Model, baseline_value: Model, target_critic: Model, target_baseline_critic: Model, model: Model, tau_model: Model,
+        rng: PRNGKey, actor: Model, baseline_actor: Model, sac_alpha: Model, critic: Model, value: Model, baseline_critic: Model, baseline_value: Model, target_critic: Model, target_baseline_critic: Model, model: Model, tau_model: Model,
         data_batch: Batch, model_batch: Batch, model_batch_ratio: float, discount: float, tau: float,  
         expectile: float, temperature: float, target_entropy: float, lamb: float, horizon_length: int, num_actor_updates: int, baseline: str, num_repeat: int,
     ) -> Tuple[PRNGKey, Model, Model, Model, Model, Model, Model, InfoDict]:
@@ -57,32 +57,26 @@ def _update_jit(
                       returns_to_go=None,)
 
     #new_value, value_info = update_v(rng, target_critic, value, actor, data_batch, model_batch, expectile_policy)
-    key, key2, key3, rng = jax.random.split(rng, 4)
+    key, key2, key3, key4, rng = jax.random.split(rng, 5)
 
-    if True:
-        new_actor = actor
-        for _ in range(num_actor_updates):
-            new_actor, actor_info = gae_update_actor(key, new_actor, critic, model,
-                                                     model_batch, discount, temperature, alpha, lamb, horizon_length, expectile, num_repeat)
-            #new_actor, actor_info = update_actor(key, new_actor, critic, model,
-            #                                     mix_batch, discount, temperature, alpha)
-        #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
-        #                                         model_batch, discount, temperature, alpha)
-        #new_actor, actor_info = reinforce_update_actor(key, actor, target_critic, new_value, model,
-        #                                         model_batch, discount, temperature, alpha)
-        #new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
-        new_alpha, alpha_info = update_alpha(key2, actor_info['log_probs'], sac_alpha, target_entropy)
+    #new_actor, actor_info = gae_update_actor(key, actor, critic, model,
+    #                                         model_batch, discount, temperature, alpha, lamb, horizon_length, expectile, num_repeat)
+    new_actor, actor_info = ms_update_actor(key, actor, critic, value, model,
+                                             model_batch, discount, temperature, alpha, lamb, horizon_length, 0.0)
+    #new_actor, actor_info = update_actor(key, new_actor, critic, model,
+    #                                     mix_batch, discount, temperature, alpha)
+    #new_actor, actor_info = awr_update_actor(key, actor, target_critic, new_value, model,
+    #                                         model_batch, discount, temperature, alpha)
+    #new_actor, actor_info = reinforce_update_actor(key, actor, target_critic, new_value, model,
+    #                                         model_batch, discount, temperature, alpha)
+    #new_alpha, alpha_info = update_alpha(key2, actor, sac_alpha, mix_batch, target_entropy)
+    new_alpha, alpha_info = update_alpha(key2, actor_info['log_probs'], sac_alpha, target_entropy)
 
-        new_critic, critic_info = update_q(key3, critic, target_critic, new_actor, model,
-                                           data_batch, model_batch, model_batch_ratio,
-                                           discount, temperature, lamb, horizon_length, expectile, target_baseline_critic, num_repeat) 
-    
-    else:
-        new_actor, new_critic, new_alpha, actor_info, critic_info, alpha_info = update_all(
-            key3, actor, critic, target_critic, model, sac_alpha, target_baseline_critic,
-            data_batch, model_batch, model_batch_ratio,
-            discount, lamb, horizon_length, expectile, target_entropy,
-        ) 
+    new_critic, critic_info = update_q(key3, critic, value, new_actor, model,
+                                       data_batch, model_batch, model_batch_ratio,
+                                       discount, temperature, lamb, horizon_length, expectile, target_baseline_critic, num_repeat)
+    new_value, value_info = update_v(key4, target_critic, value, actor, data_batch, model_batch, 0.9, model_batch_ratio)
+    #new_value, value_info = value, {}
 
     if baseline is None:
         new_baseline_critic = baseline_critic
@@ -119,10 +113,10 @@ def _update_jit(
     new_tau_model, tau_model_info = update_tau_model(tau_model, 0.)
     new_target_critic = target_update(new_critic, target_critic, tau)
 
-    return rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, {
+    return rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_value, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, {
         **critic_info,
         **baseline_info,
-        #**value_info,
+        **value_info,
         **actor_info,
         **alpha_info,
         **tau_model_info,
@@ -426,8 +420,8 @@ class Learner(object):
         
 
     def update(self, data_batch: Batch, model_batch: Batch, model_batch_ratio: float) -> InfoDict:
-        new_rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, info = _update_jit(
-            self.rng, self.actor, self.baseline_actor, self.alpha, self.critic, self.baseline_critic, self.baseline_value, self.target_critic, self.target_baseline_critic, self.model, self.tau_model,
+        new_rng, new_actor, new_baseline_actor, new_alpha, new_tau_model, new_critic, new_value, new_baseline_critic, new_baseline_value, new_target_critic, new_target_baseline_critic, info = _update_jit(
+            self.rng, self.actor, self.baseline_actor, self.alpha, self.critic, self.value, self.baseline_critic, self.baseline_value, self.target_critic, self.target_baseline_critic, self.model, self.tau_model,
             data_batch, model_batch, model_batch_ratio, self.discount, self.tau,
             self.expectile, self.temperature, self.target_entropy, self.lamb, self.horizon_length, self.num_actor_updates, self.baseline, self.num_repeat)
 
@@ -437,6 +431,7 @@ class Learner(object):
         self.alpha = new_alpha
         self.tau_model = new_tau_model
         self.critic = new_critic
+        self.value = new_value
         self.baseline_critic = new_baseline_critic
         self.baseline_value = new_baseline_value
         self.target_critic = new_target_critic

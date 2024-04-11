@@ -139,10 +139,13 @@ class D4RLTimeDataset(Dataset):
         dones_float[-1] = 1
         dataset['dones_float'] = dones_float
         for k in dataset:
+            D = len(dataset[k].shape)
             dataset[k] = np.lib.stride_tricks.sliding_window_view(dataset[k], T, axis=0)
-            if len(dataset[k].shape) == 3:
-                dataset[k] = dataset[k].transpose((0, 2, 1))
+            dataset[k] = np.transpose(dataset[k], [0] + [i%D+1 for i in range(1, D+1)])
             #print(k, dataset[k].shape)
+
+        self.indxs = np.where(np.all(np.logical_or(dataset['dones_float'] == 0, dataset['terminals']), axis=1))[0]
+        print(self.indxs)
 
         returns_to_go = np.zeros_like(dataset['rewards'])
         #returns_to_go[-1] = dataset['rewards'][-1] 
@@ -153,10 +156,19 @@ class D4RLTimeDataset(Dataset):
                          actions=dataset['actions'].astype(np.float32),
                          rewards=dataset['rewards'].astype(np.float32),
                          masks=1.0 - dataset['terminals'].astype(np.float32),
-                         dones_float=dones_float.astype(np.float32),
+                         dones_float=dataset['dones_float'].astype(np.float32),
                          next_observations=dataset['next_observations'].astype(np.float32),
                          returns_to_go=returns_to_go.astype(np.float32),
-                         size=len(dataset['observations']))
+                         size=len(self.indxs))
+
+    def sample(self, batch_size: int) -> Batch:
+        indx = np.random.choice(self.indxs, size=batch_size)
+        return Batch(observations=self.observations[indx],
+                     actions=self.actions[indx],
+                     rewards=self.rewards[indx],
+                     masks=self.masks[indx],
+                     next_observations=self.next_observations[indx],
+                     returns_to_go=self.returns_to_go[indx])
 
 class D4RLDataset(Dataset):
     def __init__(self,
@@ -195,7 +207,6 @@ class D4RLDataset(Dataset):
                          next_observations=dataset['next_observations'].astype(np.float32),
                          returns_to_go=returns_to_go.astype(np.float32),
                          size=len(dataset['observations']))
-
 
 class ReplayBuffer(Dataset):
     def __init__(self, observation_space: gym.spaces.Box, action_dim: int,
@@ -286,3 +297,32 @@ class ReplayBuffer(Dataset):
 
         self.insert_index = (self.insert_index + batch_size) % self.capacity
         self.size = min(self.size + batch_size, self.capacity)
+
+class ReplayTimeBuffer(ReplayBuffer):
+    def __init__(self, observation_space: gym.spaces.Box, action_dim: int,
+            capacity: int, T: int):
+
+        observations = np.empty((capacity, T, *observation_space.shape),
+                                dtype=observation_space.dtype)
+        actions = np.empty((capacity, T, action_dim), dtype=np.float32)
+        rewards = np.empty((capacity, T), dtype=np.float32)
+        masks = np.empty((capacity, T), dtype=np.float32)
+        dones_float = np.empty((capacity, T), dtype=np.float32)
+        next_observations = np.empty((capacity, T, *observation_space.shape),
+                                     dtype=observation_space.dtype)
+        returns_to_go = np.empty((capacity, T), dtype=np.float32)
+        super(ReplayBuffer, self).__init__(observations=observations,
+                         actions=actions,
+                         rewards=rewards,
+                         masks=masks,
+                         dones_float=dones_float,
+                         next_observations=next_observations,
+                         returns_to_go=returns_to_go,
+                         size=0)
+
+        self.size = 0
+
+        self.insert_index = 0
+        self.capacity = capacity
+
+

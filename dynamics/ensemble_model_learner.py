@@ -122,6 +122,10 @@ class EffEnsembleDynamicModel(nn.Module):
                  actions: jnp.ndarray,
                  training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
 
+        shapes = observations.shape[:-1]
+        observations = observations.reshape(-1, observations.shape[-1])
+        actions = actions.reshape(-1, actions.shape[-1])
+
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
         N, C = z.shape; E = self.elites.shape[0]; R = (N-1) // E + 1
@@ -145,12 +149,16 @@ class EffEnsembleDynamicModel(nn.Module):
             next_obs = samples[..., :-1]
             reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
             terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
+            reward = terminal * self.reward_scaler[0] + self.reward_scaler[1]
         else:
             samples = jnp.concatenate([ensemble_samples[:, :, :-1] + observations[None], ensemble_samples[:, :, -1:]], axis=2)
             next_obs = samples[..., :-1]
             reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
             terminal = self.terminal_fn(observations, actions, next_obs[0]).squeeze(1)
 
+        next_obs = next_obs.reshape((*shapes, -1))
+        reward = reward.reshape(shapes)
+        terminal = terminal.reshape(shapes)
         info = {}
         info["raw_reward"] = reward
 
