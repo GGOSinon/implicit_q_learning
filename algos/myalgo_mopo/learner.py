@@ -23,6 +23,7 @@ from algos.cql.actor import update_actor as update_cql_actor
 
 from dynamics.termination_fns import get_termination_fn
 from dynamics.ensemble_model_learner import EnsembleWorldModel, sample_step, EnsembleDynamicModel
+from dynamics.dreamer_model import WorldModel as DreamerV2Model
 from dynamics.model_learner import WorldModel
 from dynamics.oracle import MujocoOracleDynamics
 from offlinerlkit.dynamics.ensemble_dynamics import EnsembleDynamics
@@ -192,6 +193,18 @@ class Learner(object):
             model = Model.create(model_def, inputs=[model_key, observations, actions], tx=None)
         if self.dynamics == 'oracle':
             model = MujocoOracleDynamics(env)
+        if self.dynamics == 'dreamerv2':
+            task, diff = env_name.split('-')
+            ckpt_path = f'../dreamerv2-EP/models/{task}/{diff}/{seed}/final_model.pkl'
+            with open(ckpt_path, 'rb') as F:
+                ckpt = pkl.load(F)
+
+            model_def = DreamerV2WorldModel(model_hidden_dims, obs_dim, action_dim, training=False)
+            model = Model.create(model_def, inputs=[model_key, observations, actions], tx=None)
+            print(ckpt)
+            print(ckpt.keys())
+            import pprint
+            pprint.pprint(jax.tree_map(model.params()))
         if self.dynamics == 'dreamer':
             import dreamerv3
             import dreamerv3.embodied

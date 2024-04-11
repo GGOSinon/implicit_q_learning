@@ -22,9 +22,10 @@ import pickle as pkl
 import wandb
 import wrappers
 import orbax.checkpoint
-from dataset_utils import D4RLDataset, NeoRLDataset, split_into_trajectories, ReplayBuffer
+from dataset_utils import D4RLDataset, NeoRLDataset, DMCDataset, split_into_trajectories, ReplayBuffer
 from evaluation import evaluate, take_video
 from algos.myalgo_mopo.learner import Learner
+import common
 #from algos.myalgo_dreamer.learner import Learner
 
 FLAGS = flags.FLAGS
@@ -96,23 +97,28 @@ def normalize(dataset):
 def make_env_and_dataset(env_name,
                          seed, discount) -> Tuple[gym.Env, D4RLDataset]:
 
-    is_neorl = env_name.split('-')[1] == 'v3' 
-    if is_neorl:
-        import neorl
-        task, version, data_type = tuple(env_name.split("-"))
-        env = neorl.make(task+'-'+version)
+    is_neorl = env_name.split('-')[1] == 'v3'
+    is_dmc = ('v2' not in env_name) and ('v3' not in env_name)
+    if is_dmc:
+        task, diff = env_name.split('-')
+        env = common.DMC(task)
     else:
-        env = gym.make(env_name)
-
-    env = wrappers.EpisodeMonitor(env)
-    env = wrappers.SinglePrecision(env)
-
-    env.seed(seed)
-    env.action_space.seed(seed)
-    env.observation_space.seed(seed)
+        if is_neorl:
+            import neorl
+            task, version, data_type = tuple(env_name.split("-"))
+            env = neorl.make(task+'-'+version)
+        else:
+            env = gym.make(env_name)
+        env = wrappers.EpisodeMonitor(env)
+        env = wrappers.SinglePrecision(env)
+        env.seed(seed)
+        env.action_space.seed(seed)
+        env.observation_space.seed(seed)
 
     if is_neorl:
         dataset = NeoRLDataset(env, data_type, discount)
+    elif is_dmc:
+        dataset = DMCDataset(f'../../v-d4rl/{task}/{diff}/64px', discount)
     else:
         dataset = D4RLDataset(env, discount)
 

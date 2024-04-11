@@ -6,7 +6,7 @@ import gym
 import numpy as np
 from tqdm import tqdm
 from common import Batch
-
+import glob, os
 
 def split_into_trajectories(observations, actions, rewards, masks, dones_float,
                             next_observations):
@@ -112,6 +112,58 @@ class NeoRLDataset(Dataset):
                          next_observations=dataset['next_observations'].astype(np.float32),
                          returns_to_go=returns_to_go.astype(np.float32),
                          size=len(dataset['observations']))
+
+import tqdm
+class DMCDataset(Dataset):
+    def __init__(self,
+                 data_path: str,
+                 T: int,
+                 discount: float = 1.0,
+                 clip_to_eps: bool = True,
+                 eps: float = 1e-5):
+
+        dataset = []
+        for filename in tqdm.tqdm(sorted(glob.glob(os.path.join(data_path, '*.npz')))):
+            with open(filename, 'rb') as F:
+                episode = np.load(F)
+                episode = {k: episode[k] for k in episode.keys()}
+            dataset.append(episode)
+
+        dataset = {k: np.concatenate([episode[k] for episode in dataset], axis=0) for k in dataset[0]}
+        for k in dataset:
+            print(k, dataset[k].shape)
+
+        if clip_to_eps:
+            lim = 1 - eps
+            dataset['action'] = np.clip(dataset['action'], -lim, lim)
+
+        dones_float = 1 - dataset['terminal']
+        for k in dataset:
+            D = len(dataset[k].shape)
+            dataset[k] = np.lib.stride_tricks.sliding_window_view(dataset[k], T, axis=0)
+            dataset[k] = dataset[k].transpose([0] + [i%D + 1 for i in range(1, D+1)])
+            #if len(dataset[k].shape) == 3:
+            #    dataset[k] = dataset[k].transpose((0, 2, 1))
+            #print(k, dataset[k].shape)
+
+        returns_to_go = np.zeros_like(dataset['reward'])
+        #returns_to_go[-1] = dataset['rewards'][-1] 
+        #for i in reversed(range(len(dones_float) - 1)):
+        #    returns_to_go[i] = dataset['rewards'][i] + returns_to_go[i+1] * discount * (1.0 - dones_float[i])
+
+        super().__init__(dataset['image'][:-1].astype(np.float32),
+                         actions=dataset['action'][:-1].astype(np.float32),
+                         rewards=dataset['reward'][:-1].astype(np.float32),
+                         masks=1.0 - dataset['terminal'].astype(np.float32),
+                         dones_float=dones_float.astype(np.float32),
+                         next_observations=dataset['next_observations'].astype(np.float32),
+                         returns_to_go=returns_to_go.astype(np.float32),
+                         size=len(dataset['observations']))
+
+
+if __name__ == '__main__':
+    dataset = DMCDataset('../../v-d4rl/walker_walk/medium/64px', 5)
+    print(dataset)
 
 class D4RLTimeDataset(Dataset):
     def __init__(self,
