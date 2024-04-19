@@ -17,453 +17,165 @@ import dreamerv3.jaxutils as jaxutils
 #import dreamerv3.ninjax as nj
 from dreamerv3.agent import WorldModel as DreamerV3WorldModel
 from dreamerv3.embodied.envs import from_gym
-
+from dynamics.dreamer_nets import Encoder, DecoderHead, RewardHead, RSSM
 sg = lambda x: jax.tree_util.tree_map(jax.lax.stop_gradient, x)
 cast = lambda x: jax.tree_util.tree_map(lambda _x: _x.astype(jnp.float32), x)
-
-def scan(func, carry, xs, unroll):
-    #length = len(jax.tree_util.tree_map(lambda x: x[0], xs))
-    def inner(carry, x):
-        x, rng = x
-        carry, y = fun(rng, carry, x, create=False, modify=False)
-        #post(carry), prior(y) = obs_step(self, prev_state, prev_action, embed, is_first)
-        return carry, y
-    carry, ys = jax.lax.scan(inner, carry, xs, length, False, unroll)
-    return carry, ys
-
-import gym
 
 from common import Batch, InfoDict, Model, PRNGKey, MLP, Params, default_init
 from dataclasses import dataclass, field
 
-class EnsembleRSSM(nn.Module):
-    training: bool 
-    _deter: int = 1024
-    _stoch: int = 32
-    _classes: int = 32
-    _unroll: bool = False
-    _initial: str = 'learned'
-    _unimix: float = 0.01
-    _action_clip: float = 1.0
-    _units: int = 640
-    _ensemble: int = 5
-
-    def setup(self):
-        self.rssms = [RSSM(self.training) for i in range(self._ensemble)]
-
-    def initial(self, bs):
-        res = []
-        for i in range(self._ensemble):
-            res.append(self.rssms[i].initial(bs))
-        return res
-
-    def __call__(self, key, embed, action, is_first, state=None):
-        bs = embed.shape[0]
-        if self.training:
-            assert embed.shape[1] == action.shape[1]
-            return self.observe(key, embed, action, is_first, state)
-        else:
-            assert embed is None
-            return self.imagine(action)
-
-    def observe(self, key, embed, action, is_first, state):
-        batch_size = embed.shape[0]
-        if state is None:
-            state = self.initial(batch_size)
-
-        post, prior = [], []
-        for i in range(self._ensemble):
-            _post, _prior = self.rssms[i].observe(key, embed, action, is_first, state[i])
-            post.append(_post)
-            prior.append(_prior)
-        post = {k: jnp.stack([_post[k] for _post in post], axis=0) for k in post[0]}
-        prior = {k: jnp.stack([_prior[k] for _prior in prior], axis=0) for k in prior[0]}
-        idx = jax.random.choice(key, self._ensemble, (1, batch_size))
-        post = {k: jnp.take_along_axis(post[k], idx.reshape((1, batch_size,) + (1,)*(len(post[k].shape)-2)), axis=0)[0] for k in post}
-        prior = {k: jnp.take_along_axis(prior[k], idx.reshape((1, batch_size,) + (1,)*(len(prior[k].shape)-2)), axis=0)[0] for k in prior}
-        return post, prior 
-
-
-class RSSM(nn.Module):
-    training: bool 
-    _deter: int = 1024
-    _stoch: int = 32
-    _classes: int = 32
-    _unroll: bool = False
-    _initial: str = 'learned'
-    _unimix: float = 0.01
-    _action_clip: float = 1.0
-    _units: int = 640
-    #_kw: dict = field(default_factory=lambda:{'units': 640, 'act': 'silu', 'norm': 'layer'}) 
-
-    def setup(self):
-        self.initial_state = self.param('initial', nn.initializers.constant(0), (self._deter))
-        self.img_in = nn.Sequential([nn.Dense(self._units, kernel_init=default_init()),
-                                     nn.LayerNorm(), nn.silu])
-        self.img_gru = nn.Dense(3 * self._deter, kernel_init=default_init())
-        self.img_out = nn.Sequential([nn.Dense(self._units, kernel_init=default_init()),
-                                     nn.LayerNorm(), nn.silu])
-        self.img_stats = nn.Dense(self._stoch * self._classes, kernel_init=default_init())
-        self.obs_out = nn.Sequential([nn.Dense(self._units, kernel_init=default_init()),
-                                     nn.LayerNorm(), nn.silu])
-        self.obs_stats = nn.Dense(self._stoch * self._classes, kernel_init=default_init())
-
-    def initial(self, bs):
-        state = {}
-        state['deter'] = jnp.repeat(jnp.tanh(self.initial_state)[None], bs, 0)
-        state['stoch'] = self.get_stoch(cast(state['deter']))
-        state['logit'] = jnp.zeros([bs, self._stoch, self._classes])
-        return cast(state)
-
-    def __call__(self, key, embed, action, is_first, state=None):
-        bs = embed.shape[0]
-        if state is None:
-            state = self.initial(bs)
-
-        if self.training:
-            assert embed.shape[1] == action.shape[1]
-            return self.observe(key, embed, action, is_first, state)
-        else:
-            assert embed is None
-            return self.imagine(action)
-
-    def imagine(self, action, state=None):
-        if state is None:
-            state = self.initial(action.shape[0])
-        swap = lambda x: x.transpose([1, 0] + list(range(2, len(x.shape))))
-        action = swap(action)
-        prior = scan(self.img_step, action, state, self._unroll)
-        prior = {k: swap(v) for k, v in prior.items()}
-        return prior
-
-    def _gru(self, x, deter):
-        x = jnp.concatenate([deter, x], -1)
-        x = self.img_gru(x)
-        reset, cand, update = jnp.split(x, 3, -1)
-        reset = jax.nn.sigmoid(reset)
-        cand = jnp.tanh(reset * cand)
-        update = jax.nn.sigmoid(update - 1)
-        deter = update * cand + (1 - update) * deter
-        return deter, deter
-
-    def img_step(self, prev_state, key, prev_action):
-        prev_stoch = prev_state['stoch']
-        prev_action = cast(prev_action)
-        if self._action_clip > 0.0:
-            prev_action *= sg(self._action_clip / jnp.maximum(self._action_clip, jnp.abs(prev_action)))
-        if self._classes:
-            shape = prev_stoch.shape[:-2] + (self._stoch * self._classes,)
-            prev_stoch = prev_stoch.reshape(shape)
-        #print(prev_action.shape, prev_stoch.shape)
-        if len(prev_action.shape) > len(prev_stoch.shape):  # 2D actions.
-            shape = prev_action.shape[:-2] + (np.prod(prev_action.shape[-2:]),)
-            prev_action = prev_action.reshape(shape)
-        x = jnp.concatenate([prev_stoch, prev_action], -1)
-        x = self.img_in(x)
-        x, deter = self._gru(x, prev_state['deter'])
-        x = self.img_out(x)
-        stats = self._img_stats(x)
-        dist = self.get_dist(stats)
-        stoch = dist.sample(seed=key)
-        prior = {'stoch': stoch, 'deter': deter, **stats}
-        return cast(prior)
-
-    def observe(self, key, embed, action, is_first, state=None):
-        if state is None:
-            state = self.initial(action.shape[0])
-        length = action.shape[1]
-        swap = lambda x: x.transpose([1, 0] + list(range(2, len(x.shape))))
-        step = lambda prev, inputs: self.obs_step(prev[0], prev[1], *inputs)
-        inputs = (swap(action), swap(embed), swap(is_first))
-        start = (key, state)
-        post, prior = [], []
-        for i in range(length):
-            key, rng = jax.random.split(key)
-            _post, _prior = self.obs_step(key, state, action[:, i], embed[:, i], is_first[:, i])
-            post.append(_post)
-            prior.append(_prior)
-            state = _post
-
-        post = {k: jnp.stack([post[i][k] for i in range(length)], axis=0) for k in post[0].keys()}
-        prior = {k: jnp.stack([prior[i][k] for i in range(length)], axis=0) for k in prior[0].keys()} 
-        #post, prior = jax.lax.scan(step, start, inputs, length, False, self._unroll)
-        post = {k: swap(v) for k, v in post.items()}
-        prior = {k: swap(v) for k, v in prior.items()}
-        return post, prior
-
-    def get_dist(self, state, argmax=False):
-        logit = state['logit'].astype(jnp.float32)
-        return tfd.Independent(jaxutils.OneHotDist(logit), 1)
-
-    def _img_stats(self, x):
-        # [sample(h_t) -> z_t]
-        if self._classes:
-            x = self.img_stats(x)
-            logit = x.reshape(x.shape[:-1] + (self._stoch, self._classes))
-        if self._unimix:
-            probs = jax.nn.softmax(logit, -1)
-            uniform = jnp.ones_like(probs) / probs.shape[-1]
-            probs = (1 - self._unimix) * probs + self._unimix * uniform
-            logit = jnp.log(probs)
-        stats = {'logit': logit}
-        return stats
-
-    def _obs_stats(self, x):
-        if self._classes:
-            x = self.obs_stats(x)
-            logit = x.reshape(x.shape[:-1] + (self._stoch, self._classes))
-        if self._unimix:
-            probs = jax.nn.softmax(logit, -1)
-            uniform = jnp.ones_like(probs) / probs.shape[-1]
-            probs = (1 - self._unimix) * probs + self._unimix * uniform
-            logit = jnp.log(probs)
-        stats = {'logit': logit}
-        return stats
-
-    def get_stoch(self, deter):
-        #x = self.get('img_out', Linear, **self._kw)(deter)
-        x = self.img_out(deter)
-        stats = self._img_stats(x)
-        dist = self.get_dist(stats)
-        return cast(dist.mode())
-
-    def obs_step(self, key, prev_state, prev_action, embed, is_first):
-        #print(key, prev_action.shape, embed.shape, is_first.shape)
-        key, rng = jax.random.split(key)
-        is_first = cast(is_first)
-        prev_action = cast(prev_action)
-        if self._action_clip > 0.0:
-          prev_action *= sg(self._action_clip / jnp.maximum(self._action_clip, jnp.abs(prev_action)))
-        prev_state, prev_action = jax.tree_util.tree_map(
-            lambda x: self._mask(x, 1.0 - is_first), (prev_state, prev_action)
-        )
-        prev_state = jax.tree_util.tree_map(
-            lambda x, y: x + self._mask(y, is_first), prev_state, self.initial(len(is_first))
-        )
-        prior = self.img_step(prev_state, key, prev_action)
-
-        x = jnp.concatenate([prior['deter'], embed], -1)
-        x = self.obs_out(x); stats = self._obs_stats(x)
-        dist = self.get_dist(stats)
-        stoch = dist.sample(seed=key)
-        post = {'stoch': stoch, 'deter': prior['deter'], **stats}
-        return cast(post), cast(prior)
-
-    def _mask(self, value, mask):
-        return jnp.einsum('b...,b->b...', value, mask.astype(value.dtype))
-
-class _RSSM(nn.Module):
-  def initial(self, bs):
-    if self._classes:
-      state = dict(
-          deter=jnp.zeros([bs, self._deter], f32),
-          logit=jnp.zeros([bs, self._stoch, self._classes], f32),
-          stoch=jnp.zeros([bs, self._stoch, self._classes], f32))
-    else:
-      state = dict(
-          deter=jnp.zeros([bs, self._deter], f32),
-          mean=jnp.zeros([bs, self._stoch], f32),
-          std=jnp.ones([bs, self._stoch], f32),
-          stoch=jnp.zeros([bs, self._stoch], f32))
-    if self._initial == 'zeros':
-      return cast(state)
-    elif self._initial == 'learned':
-      deter = self.get('initial', jnp.zeros, state['deter'][0].shape, f32)
-      state['deter'] = jnp.repeat(jnp.tanh(deter)[None], bs, 0)
-      state['stoch'] = self.get_stoch(cast(state['deter']))
-      return cast(state)
-    else:
-      raise NotImplementedError(self._initial)
-
-  def observe(self, embed, action, is_first, state=None):
-    swap = lambda x: x.transpose([1, 0] + list(range(2, len(x.shape))))
-    if state is None:
-      state = self.initial(action.shape[0])
-    step = lambda prev, inputs: self.obs_step(prev[0], *inputs)
-    inputs = swap(action), swap(embed), swap(is_first)
-    start = state, state
-    post, prior = jaxutils.scan(step, inputs, start, self._unroll)
-    post = {k: swap(v) for k, v in post.items()}
-    prior = {k: swap(v) for k, v in prior.items()}
-    return post, prior
-
-  def imagine(self, action, state=None):
-    swap = lambda x: x.transpose([1, 0] + list(range(2, len(x.shape))))
-    state = self.initial(action.shape[0]) if state is None else state
-    assert isinstance(state, dict), state
-    action = swap(action)
-    prior = jaxutils.scan(self.img_step, action, state, self._unroll)
-    prior = {k: swap(v) for k, v in prior.items()}
-    return prior
-
-  def get_dist(self, state, argmax=False):
-    logit = state['logit'].astype(f32)
-    return tfd.Independent(jaxutils.OneHotDist(logit), 1)
-
-  def obs_step(self, prev_state, prev_action, embed, is_first):
-    is_first = cast(is_first)
-    prev_action = cast(prev_action)
-    if self._action_clip > 0.0:
-      prev_action *= sg(self._action_clip / jnp.maximum(
-          self._action_clip, jnp.abs(prev_action)))
-    prev_state, prev_action = jax.tree_util.tree_map(
-        lambda x: self._mask(x, 1.0 - is_first), (prev_state, prev_action))
-    prev_state = jax.tree_util.tree_map(
-        lambda x, y: x + self._mask(y, is_first),
-        prev_state, self.initial(len(is_first)))
-    prior = self.img_step(prev_state, prev_action)
-    x = jnp.concatenate([prior['deter'], embed], -1)
-    x = self.get('obs_out', Linear, **self._kw)(x)
-    stats = self._stats('obs_stats', x)
-    dist = self.get_dist(stats)
-    stoch = dist.sample(seed=nj.rng())
-    post = {'stoch': stoch, 'deter': prior['deter'], **stats}
-    return cast(post), cast(prior)
-
-  def img_step(self, prev_state, prev_action):
-    prev_stoch = prev_state['stoch']
-    prev_action = cast(prev_action)
-    if self._action_clip > 0.0:
-      prev_action *= sg(self._action_clip / jnp.maximum(
-          self._action_clip, jnp.abs(prev_action)))
-    if self._classes:
-      shape = prev_stoch.shape[:-2] + (self._stoch * self._classes,)
-      prev_stoch = prev_stoch.reshape(shape)
-    if len(prev_action.shape) > len(prev_stoch.shape):  # 2D actions.
-      shape = prev_action.shape[:-2] + (np.prod(prev_action.shape[-2:]),)
-      prev_action = prev_action.reshape(shape)
-    x = jnp.concatenate([prev_stoch, prev_action], -1)
-    x = self.get('img_in', Linear, **self._kw)(x)
-    x, deter = self._gru(x, prev_state['deter'])
-    x = self.get('img_out', Linear, **self._kw)(x)
-    stats = self._stats('img_stats', x)
-    dist = self.get_dist(stats)
-    stoch = dist.sample(seed=nj.rng())
-    prior = {'stoch': stoch, 'deter': deter, **stats}
-    return cast(prior)
-
-  def get_stoch(self, deter):
-    x = self.get('img_out', Linear, **self._kw)(deter)
-    stats = self._stats('img_stats', x)
-    dist = self.get_dist(stats)
-    return cast(dist.mode())
-
-  def _gru(self, x, deter):
-    x = jnp.concatenate([deter, x], -1)
-    kw = {**self._kw, 'act': 'none', 'units': 3 * self._deter}
-    x = self.get('gru', Linear, **kw)(x)
-    reset, cand, update = jnp.split(x, 3, -1)
-    reset = jax.nn.sigmoid(reset)
-    cand = jnp.tanh(reset * cand)
-    update = jax.nn.sigmoid(update - 1)
-    deter = update * cand + (1 - update) * deter
-    return deter, deter
-
-  def _stats(self, name, x):
-    if self._classes:
-      x = self.get(name, Linear, self._stoch * self._classes)(x)
-      logit = x.reshape(x.shape[:-1] + (self._stoch, self._classes))
-      if self._unimix:
-        probs = jax.nn.softmax(logit, -1)
-        uniform = jnp.ones_like(probs) / probs.shape[-1]
-        probs = (1 - self._unimix) * probs + self._unimix * uniform
-        logit = jnp.log(probs)
-      stats = {'logit': logit}
-      return stats
-    else:
-      x = self.get(name, Linear, 2 * self._stoch)(x)
-      mean, std = jnp.split(x, 2, -1)
-      std = 2 * jax.nn.sigmoid(std / 2) + 0.1
-      return {'mean': mean, 'std': std}
-
-  def _mask(self, value, mask):
-    return jnp.einsum('b...,b->b...', value, mask.astype(value.dtype))
-
-class RewardHead(nn.Module):
-    num_bins: int = 255
-    
-    def setup(self):
-        self.net = nn.Dense(self.num_bins)
-
-    def __call__(self, x):
-        x = self.net(x)
-        print(x.shape)
-        return jaxutils.DiscDist(x)
-
-class ContHead(nn.Module):
-    def setup(self):
-        self.net = nn.Dense(1)
-
-    def __call__(self, x):
-        x = self.net(x)
-        dist = tfd.Bernoulli(x)
-        return tfd.Independent(dist, 1)
-
-class DecoderHead(nn.Module):
-    hidden_dims: Sequence[int]
-
-    def setup(self):
-        self.net = MLP(self.hidden_dims)
-
-    def __call__(self, x):
-        x = self.net(x)
-        return jaxutils.SymlogDist(x, 1, 'mse', 'sum')
-
-class WorldModel(nn.Module):
-    hidden_dims: int
-    obs_dim: int
-    action_dim: int
-    training: bool
+class WorldModelObserve(nn.Module):
+    #hidden_dims: int
+    #obs_dim: int
+    #action_dim: int
     dropout_rate: Optional[float] = None
     _min: Optional[float] = -10.
     _max: Optional[float] = 0.5
 
     def setup(self):
-        self.encoder = MLP(self.hidden_dims, activate_final=True, dropout_rate=self.dropout_rate)
-        self.rssm = EnsembleRSSM(self.training)
-        self.decoder = DecoderHead([self.hidden_dims[-1], self.obs_dim])
+        self.encoder = Encoder()
+        self.rssm = RSSM(True)
+        #self.decoder = DecoderHead()
         #MLP([self.hidden_dims[-1], self.obs_dim], activate_final=False, dropout_rate=self.dropout_rate)
-        self.reward_head = RewardHead(255)
-        self.mask_head = ContHead()
+        self.reward_head = RewardHead()
+        #self.mask_head = ContHead()
 
     def __call__(self,
                  rng: PRNGKey,
                  observations: jnp.ndarray, # [N, L, d_obs]
                  actions: jnp.ndarray,      # [N, L, d_act]
                  is_first: jnp.ndarray,     # [N, L]
-                 states: Dict[str, jnp.ndarray] = None,
-                 training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+                 states: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
        
-        if self.training:
-            N, L = observations.shape[:2]
-            print(observations.shape)
-            embed = self.encoder(observations, training=training)
-            post, prior = self.rssm(rng, embed, actions, jnp.zeros((N, L), dtype=bool), states)
+        assert states is None
+        N, L = observations.shape[:2]
+        print(observations.shape)
+        embed = self.encoder(observations)
+        #jax.debug.print('EMBED {x}', x=embed)
+        print(embed.shape, actions.shape)
+        post, prior = self.rssm(rng, embed, actions, jnp.zeros((N, L), dtype=bool), None)
+        return post
 
-            feats = jnp.concatenate([post['deter'].reshape((N, L, -1)),
-                                     post['stoch'].reshape((N, L, -1)),], axis = 2)
-            r_hat_dist = self.reward_head(feats); r_hat = r_hat_dist.mode()
-            cont_hat_dist = self.mask_head(feats); done_hat = 1 - cont_hat_dist.mode()
-            s_hat_dist = self.decoder(feats); s_hat = s_hat_dist
+class WorldModelImagine(nn.Module):
+    #hidden_dims: int
+    #obs_dim: int
+    #action_dim: int
+    dropout_rate: Optional[float] = None
+    _min: Optional[float] = -10.
+    _max: Optional[float] = 0.5
 
-            info = {
-                'post': post,
-                'prior': prior,
-                'reward': r_hat_dist,
-                'cont': cont_hat_dist,
-                's_hat': s_hat_dist
-            }
-            return s_hat, r_hat, done_hat, info 
+    def setup(self):
+        self.encoder = Encoder()
+        self.rssm = RSSM(False)
+        #self.decoder = DecoderHead()
+        #MLP([self.hidden_dims[-1], self.obs_dim], activate_final=False, dropout_rate=self.dropout_rate)
+        self.reward_head = RewardHead()
+        #self.mask_head = ContHead()
 
-        else:
-            assert state is not None 
-            N, L = observations.shape[:2]
-            z = self.encoder(observations, training=training)
-            post, prior = self.rssm(rng, z, actions, jnp.zeros((N, L), dtype=bool), states)
+    def __call__(self,
+                 rng: PRNGKey,
+                 states: jnp.ndarray, # [N, d_obs]
+                 actions: jnp.ndarray,  # [N, d_act]
+                 )-> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+       
+        batch_shape = actions.shape[:-1]; _stoch, _classes = self.rssm._stoch, self.rssm._classes
+        states = {'stoch': states[..., :_stoch*_classes].reshape((*batch_shape, _stoch, _classes)),
+                  'deter': states[..., _stoch*_classes:]}
+        prior = self.rssm(rng, None, actions, None, states)
+        #jax.debug.print('PRIOR {x}', x=prior)
 
-            feats = {**post, 'embed': embed}
-            r_hat_dist = self.reward_head(feats); r_hat = r_hat_dist.mode()
-            cont_hat_dist = self.mask_head(feats); done_hat = 1 - cont_hat_dist.mode()
-            s_hat_dist = self.decoder(feats); s_hat = s_hat_dist.mode()
+        feats = jnp.concatenate([prior['stoch'].reshape((*batch_shape, -1)),
+                                 prior['deter'].reshape((*batch_shape, -1)),], axis=-1)
+        r_hat_dist = self.reward_head(feats); r_hat = r_hat_dist.mode().squeeze(-1)
+        done_hat = jnp.zeros_like(r_hat)
+        s_hat = feats
+        #cont_hat_dist = self.mask_head(feats); done_hat = 1 - jax.nn.sigmoid(cont_hat_dist)
+        #s_hat_dist = self.decoder(feats); s_hat = s_hat_dist.mode()
 
-            return s_hat, r_hat, done_hat, {} 
+        #print(r_hat.shape, done_hat.shape, s_hat.shape)
+        return s_hat, r_hat, done_hat, {}
+
+
+def get_dreamer_wm(ckpt_path, observation_dim, action_dim, T):
+    model_observe_def = WorldModelObserve()#(200, 200, 200), observation_dim, action_dim)
+    model_imagine_def = WorldModelImagine()#model_observe_def.rssm.state_dim, action_dim)
+
+    rng = jax.random.PRNGKey(42)
+    observation = np.ones((1, T, *observation_dim))
+    action = np.ones((1, T, action_dim))
+    is_first = np.zeros((1, T))
+    model_observe = Model.create(model_observe_def, inputs=[rng, rng, observation, action, is_first, None])
+    states = model_observe(rng, observation, action, is_first, None)
+
+    states = np.concatenate([states['stoch'].reshape((T, 1024)), states['deter'].reshape((T, 200))], axis=-1)
+    action = np.ones((T, action_dim))
+    model_imagine = Model.create(model_imagine_def, inputs=[rng, rng, states, action])
+    #import pprint
+    #pprint.pprint(jax.tree_util.tree_map(jnp.shape, model_observe.params))
+    #pprint.pprint(jax.tree_util.tree_map(jnp.shape, model_imagine.params))
+    
+    import pickle as pkl
+    with open(ckpt_path, 'rb') as F:
+        ckpt = pkl.load(F)
+
+    encoder = {}
+    for i in range(4):
+        encoder[f'conv{i+1}'] = {'kernel': 2*i+1, 'bias': 2*i+2}
+
+    decoder = {}
+    for i in range(4):
+        decoder[f'conv{i+1}'] = {'kernel': 2*i+9, 'bias': 2*i+10}
+    decoder[f'mlp1'] = {'kernel': 17, 'bias': 18}
+
+    reward_head = {}
+    for i in range(4):
+        reward_head[f'mlp{i+1}'] = {'kernel': 2*i+19, 'bias': 2*i+20}
+    reward_head['net'] = {'kernel': 27, 'bias': 28}
+
+    rssm = {}
+    rssm['img_gru'] = {'layers_0': {'kernel': 29, 'bias': 30}, 'layers_1': {'scale': 31, 'bias': 32}}
+    rssm['img_in'] = {'layers_0': {'kernel': 47, 'bias': 48}}
+    for i in range(7):
+        rssm[f'img_stats_{i}'] = {'kernel': 2*i+33, 'bias': 2*i+34}
+        rssm[f'img_out_{i}'] = {'layers_0': {'kernel': 2*i+49, 'bias': 2*i+50}}
+    rssm[f'obs_stats'] = {'kernel': 63, 'bias': 64}
+    rssm[f'obs_out'] = {'layers_0': {'kernel': 65, 'bias': 66}}
+
+    jax_ckpt = {'encoder': encoder, 'decoder': decoder, 'reward_head': reward_head, 'rssm': rssm}
+    jax_ckpt = jax.tree_util.tree_map(lambda x: ckpt[x], jax_ckpt)
+    for i in range(4):
+        jax_ckpt['decoder'][f'conv{i+1}']['kernel'] = jax_ckpt['decoder'][f'conv{i+1}']['kernel'].transpose((0, 1, 3, 2))
+
+    model_observe_ckpt = {'encoder': jax_ckpt['encoder'], 'rssm': jax_ckpt['rssm']}
+    model_imagine_ckpt = {'decoder': jax_ckpt['decoder'], 'rssm': jax_ckpt['rssm'], 'reward_head': jax_ckpt['reward_head']}
+
+    import pprint
+    pprint.pprint(jax.tree_util.tree_map(jnp.shape, model_observe_ckpt))
+
+    model_observe = model_observe.replace(params = model_observe_ckpt)
+    model_imagine = model_imagine.replace(params = model_imagine_ckpt)
+
+    #for i in range(len(ckpt)):
+    #    print(i, ckpt[i].shape)
+    #    #for k in ckpt[i].keys():
+    #    #    print(k, ckpt[i][k])
+    return model_observe, model_imagine
+
+if __name__ == '__main__':
+
+    observation_dim = (64, 64, 3)
+    action_dim = 6
+    T = 5
+
+    ckpt_path = '../dreamerv2-EP/models/walker_walk/medium/1/final_model.pkl'
+    model_observe, model_imagine = get_dreamer_wm(ckpt_path, observation_dim, action_dim, T)
+
+    states = model_observe(rng, observation, action, is_first, None)
+    print("WFWEFWFFWFWEF")
+    print(states)
+
+    print("NEXT")
+    states = {k: np.ones_like(v) for k, v in states.items()}
+    next_states, rewards, done, info = model_imagine(rng, None, action, None, states)
+
+    print(next_states, rewards, done, info)

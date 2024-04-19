@@ -115,12 +115,17 @@ class EffEnsembleDynamicModel(nn.Module):
     elites: jnp.ndarray
     terminal_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
     output_all: bool = False
+    deterministic: bool = False
 
     def __call__(self,
                  key: PRNGKey,
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
                  training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+
+        shapes = observations.shape[:-1]
+        observations = observations.reshape(-1, observations.shape[-1])
+        actions = actions.reshape(-1, actions.shape[-1])
 
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
@@ -134,7 +139,10 @@ class EffEnsembleDynamicModel(nn.Module):
 
         mean, logvar = self.model(z)
         std = jnp.sqrt(jnp.exp(logvar))
-        ensemble_samples = (mean + jax.random.normal(key, mean.shape) * std)
+        if self.deterministic:
+            ensemble_samples = mean
+        else:
+            ensemble_samples = (mean + jax.random.normal(key, mean.shape) * std)
 
         if not self.output_all:
             Co = ensemble_samples.shape[-1]
@@ -145,12 +153,16 @@ class EffEnsembleDynamicModel(nn.Module):
             next_obs = samples[..., :-1]
             reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
             terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
+            #reward = terminal * self.reward_scaler[0] + self.reward_scaler[1]
         else:
             samples = jnp.concatenate([ensemble_samples[:, :, :-1] + observations[None], ensemble_samples[:, :, -1:]], axis=2)
             next_obs = samples[..., :-1]
             reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
             terminal = self.terminal_fn(observations, actions, next_obs[0]).squeeze(1)
 
+        next_obs = next_obs.reshape((*shapes, -1))
+        reward = reward.reshape(shapes)
+        terminal = terminal.reshape(shapes)
         info = {}
         info["raw_reward"] = reward
 
@@ -171,6 +183,10 @@ class EnsembleDynamicModel(nn.Module):
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
                  training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+
+        shapes = observations.shape[:-1]
+        observations = observations.reshape(-1, observations.shape[-1])
+        actions = actions.reshape(-1, actions.shape[-1])
 
         z = jnp.concatenate([observations, actions], axis=1)
         z = (z - self.scaler[0]) / self.scaler[1]
@@ -196,6 +212,10 @@ class EnsembleDynamicModel(nn.Module):
             next_obs = samples[..., :-1]
             reward = samples[..., -1] * self.reward_scaler[0] + self.reward_scaler[1]
             terminal = self.terminal_fn(observations, actions, next_obs).squeeze(1)
+
+        next_obs = next_obs.reshape((*shapes, -1))
+        reward = reward.reshape(shapes)
+        terminal = terminal.reshape(shapes)
         info = {}
         info["raw_reward"] = reward
 
@@ -238,6 +258,49 @@ class EnsembleWorldModel(nn.Module):
         pairs = [(metric, index) for metric, index in zip(metrics, range(len(metrics)))]
         idxs = np.sort(valid_losses)
         self.model.elites = idxs
+
+import torch
+import os
+def get_world_model(model_path, obs_dim, action_dim, reward_scaler, termination_fn):
+    observations = np.zeros((1, obs_dim))
+    actions = np.zeros((1, action_dim))
+    if True:
+        mu = np.load(os.path.join(model_path, 'mu.npy'))
+        std = np.load(os.path.join(model_path, 'std.npy'))
+        ckpt = torch.load(os.path.join(model_path, 'dynamics.pth'))
+        ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
+        elites = ckpt['elites']
+        scaler = (jnp.array(mu), jnp.array(std))
+        model_def = EnsembleWorldModel(7, 5, (200,200,200,200), obs_dim, action_dim, dropout_rate=None)
+        #model_def = EffEnsembleDynamicModel(model_def, scaler, reward_scaler, elites, termination_fn)
+        model_def = EnsembleDynamicModel(model_def, scaler, reward_scaler, elites, termination_fn)
+    else:
+        mu = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'mu.npy'))
+        std = np.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'std.npy'))
+        ckpt = torch.load(os.path.join('../OfflineRL-Kit/models/dynamics-ensemble-32/', env_name, 'dynamics.pth'))
+        ckpt = {k: v.cpu().numpy() for (k, v) in ckpt.items()}
+        elites = ckpt['elites']
+        scaler = (jnp.array(mu), jnp.array(std))
+        model_def = EnsembleWorldModel(40, 32, (200,200,200,200), obs_dim, action_dim, dropout_rate=None)
+        model_def = EffEnsembleDynamicModel(model_def, scaler, reward_scaler, elites, termination_fn)
+
+    model_key = jax.random.PRNGKey(42)
+    model = Model.create(model_def, inputs=[model_key, model_key, observations, actions], tx=None)
+
+    ckpt_jax = {}
+    for i in range(4):
+        ckpt_jax[f'layers_{i}'] = {}
+        ckpt_jax[f'layers_{i}']['kernel'] = ckpt[f'backbones.{i}.weight']
+        ckpt_jax[f'layers_{i}']['bias'] = ckpt[f'backbones.{i}.bias']
+    ckpt_jax[f'last_layer'] = {}
+    ckpt_jax[f'last_layer']['kernel'] = ckpt[f'output_layer.weight']
+    ckpt_jax[f'last_layer']['bias'] = ckpt[f'output_layer.bias']
+    ckpt_jax['min_logvar'] = ckpt['min_logvar']
+    ckpt_jax['max_logvar'] = ckpt['max_logvar']
+    ckpt_jaxs = {'model': ckpt_jax}
+    model = model.replace(params = ckpt_jaxs)
+
+    return model, scaler
 
 class Learner(object):
     def __init__(self,

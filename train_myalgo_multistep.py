@@ -19,13 +19,12 @@ import jax.numpy as jnp
 import subprocess
 import pickle as pkl
 
-from dynamics.termination_fns import get_termination_fn
 import wandb
 import wrappers
 import orbax.checkpoint
-from dataset_utils import D4RLDataset, NeoRLDataset, DMCDataset, split_into_trajectories, ReplayBuffer
+from dataset_utils import DMCDataset, D4RLDataset, NeoRLDataset, split_into_trajectories, ReplayBuffer, ReplayTimeBuffer
 from evaluation import evaluate, take_video
-from algos.myalgo_mopo.learner import Learner
+from algos.myalgo_multistep.learner import Learner
 import common
 #from algos.myalgo_dreamer.learner import Learner
 
@@ -33,10 +32,11 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string('env_name', 'antmaze-medium-play-v0', 'Environment name.')
 flags.DEFINE_string('load_dir', None, 'Dynamics model load dir')
-flags.DEFINE_string('save_dir', './tmp/EP/', 'Tensorboard logging dir.')
+flags.DEFINE_string('save_dir', './tmp/', 'Tensorboard logging dir.')
 flags.DEFINE_string('wandb_key', '', 'Wandb key')
 flags.DEFINE_string('dynamics', 'torch', 'Dynamics model')
 flags.DEFINE_integer('seed', 42, 'Random seed.')
+flags.DEFINE_integer('T', 16, 'Batch rollout size')
 flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
 flags.DEFINE_integer('num_layers', 3, 'number of hidden layers')
@@ -44,7 +44,7 @@ flags.DEFINE_integer('layer_size', 256, 'layer size')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('video_interval', 50000, 'Eval interval.')
-flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
+flags.DEFINE_integer('batch_size', 64, 'Mini batch size.')
 flags.DEFINE_float('discount', 0.99, 'discount')
 flags.DEFINE_float('lamb', 0.95, 'lambda for GAE')
 flags.DEFINE_float('cql_weight', None, 'CQL weight.')
@@ -57,15 +57,13 @@ flags.DEFINE_float('model_batch_ratio', 0.95, 'Model-data batch ratio.')
 flags.DEFINE_integer('rollout_batch_size', 50000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_freq', 1000, 'Rollout batch size.')
 flags.DEFINE_integer('rollout_length', 5, 'Rollout length.')
-flags.DEFINE_integer('num_repeat', 1, 'Number of rollouts')
+flags.DEFINE_integer('num_repeat', 10, 'Number of rollouts')
 flags.DEFINE_integer('rollout_retain', 5, 'Rollout retain')
 flags.DEFINE_integer('horizon_length', 5, 'Value estimation length.')
 flags.DEFINE_integer('num_actor_updates', 1, 'Number of actor updates')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
-flags.DEFINE_integer('T', 16, 'T')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
 flags.DEFINE_boolean('max_q_backup', False, 'Use max q backup')
-flags.DEFINE_boolean('debug', False, 'Use max q backup')
 flags.DEFINE_string('baseline', None, 'Use baseline')
 config_flags.DEFINE_config_file(
     'config',
@@ -98,39 +96,41 @@ def normalize(dataset):
 
 
 def make_env_and_dataset(env_name,
-                         seed, discount, model=None) -> Tuple[gym.Env, D4RLDataset]:
+                         seed, discount) -> Tuple[gym.Env, D4RLDataset]:
 
     is_neorl = env_name.split('-')[1] == 'v3'
-    is_dmc = ('v2' not in env_name) and ('v3' not in env_name)
+    is_dmc = 'walker_walk' in env_name or 'humanoid_walk' in env_name or 'cheetah_run' in env_name
     if is_dmc:
+        import common
         task, diff = env_name.split('-')
         env = common.DMC(task, 2, (64, 64), -1)
         env = common.NormalizeAction(env)
         data_path = f'../../v-d4rl/{task}/{diff}/64px'
-        dataset = DMCDataset(data_path, FLAGS.T, model, discount)
-        raw_dataset = dataset
+        dataset = DMCDataset(data_path, FLAGS.T, discount)
+        raw_dataset = None
     else:
         if is_neorl:
             import neorl
             task, version, data_type = tuple(env_name.split("-"))
             env = neorl.make(task+'-'+version)
             dataset = NeoRLDataset(env, data_type, discount)
+            raw_dataset = env.get_dataset()
         else:
             env = gym.make(env_name)
-            dataset = D4RLDataset(env, discount)
-        raw_dataset = env.get_dataset()
-        env = wrappers.EpisodeMonitor(env)
-        env = wrappers.SinglePrecision(env)
-        env.seed(seed)
-        env.action_space.seed(seed)
-        env.observation_space.seed(seed)
-
+            env = wrappers.EpisodeMonitor(env)
+            env = wrappers.SinglePrecision(env)
+            env.seed(seed)
+            env.action_space.seed(seed)
+            env.observation_space.seed(seed)
+            dataset = D4RLTimeDataset(env, FLAGS.T, discount)
+            raw_dataset = env.get_dataset()
+    
     env_name = FLAGS.env_name.lower()
+
     if 'antmaze' in env_name:
         #dataset.rewards -= 1.0
-        #reward_scale, reward_bias = 1., -1.
-        dataset.rewards = dataset.rewards * 10 - 5.
-        reward_scale, reward_bias = 10., -5.
+        dataset.rewards = dataset.rewards * 1 - 1.
+        reward_scale, reward_bias = 1., -1.
         # See https://github.com/aviralkumar2907/CQL/blob/master/d4rl/examples/cql_antmaze_new.py#L22
         # but I found no difference between (x - 0.5) * 4 and x - 1.0
     elif ('halfcheetah' in env_name or 'walker2d' in env_name
@@ -158,115 +158,83 @@ def get_normalized_score_neorl(x, env_name):
     return (x - min_score) / (max_score - min_score)
 
 def main(_):
-    if FLAGS.debug is False:
-        wandb.login(key=FLAGS.wandb_key)
-        run = wandb.init(
-        # Set the project where this run will be logged
-        project="IQL",
-            name=f"{FLAGS.env_name}_{FLAGS.seed}",
-        # Track hyperparameters and run metadata
-        config={
-            "env_name": FLAGS.env_name,
-            "seed": FLAGS.seed,
-                "expectile": FLAGS.expectile,
-                "expectile_policy": FLAGS.expectile_policy,
-                "rollout_length": FLAGS.rollout_length,
-                "horizon_length": FLAGS.horizon_length,
-                "best": None,
-                "num_updates": FLAGS.num_actor_updates,
-                "num_repeat": FLAGS.num_repeat,
-                "use_baseline": FLAGS.baseline,
-                "model_batch_ratio": FLAGS.model_batch_ratio,
-                "discount": FLAGS.discount,
-                "rollout_retain": FLAGS.rollout_retain,
-                "lamb": FLAGS.lamb,
-        },
-        )
+    wandb.login(key=FLAGS.wandb_key)
+    run = wandb.init(
+	# Set the project where this run will be logged
+	project="IQL",
+        name=f"{FLAGS.env_name}_{FLAGS.seed}",
+	# Track hyperparameters and run metadata
+	config={
+	    "env_name": FLAGS.env_name,
+	    "seed": FLAGS.seed,
+            "expectile": FLAGS.expectile,
+            "expectile_policy": FLAGS.expectile_policy,
+            "rollout_length": FLAGS.rollout_length,
+            "horizon_length": FLAGS.horizon_length,
+            "best": None,
+            "num_updates": FLAGS.num_actor_updates,
+            "num_repeat": FLAGS.num_repeat,
+            "use_baseline": FLAGS.baseline,
+            "model_batch_ratio": FLAGS.model_batch_ratio,
+            "discount": FLAGS.discount,
+            "rollout_retain": FLAGS.rollout_retain,
+            "lamb": FLAGS.lamb,
+	},
+    )
 
     summary_writer = SummaryWriter(os.path.join(FLAGS.save_dir, 'tb',
-                                            str(FLAGS.seed)),
-                                  write_to_disk=True)
+                                                str(FLAGS.seed)),
+                                   write_to_disk=True)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
     kwargs = dict(FLAGS.config)
 
-    if ('v2' not in FLAGS.env_name) and ('v3' not in FLAGS.env_name):
+    env, raw_dataset, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, FLAGS.discount)
+  
+    if 'walker_walk' in FLAGS.env_name or 'humanoid_walk' in FLAGS.env_name or 'cheetah_run' in FLAGS.env_name:
         task, diff = FLAGS.env_name.split('-')
         env = common.DMC(task, 2, (64, 64), -1)
+        env = common.NormalizeAction(env)
     else:
-        if 'v3' in FLAGS.env_name:
-            import neorl
-            task, version, data_type = tuple(FLAGS.env_name.split("-"))
-            env = neorl.make(task+'-'+version)
+        if FLAGS.env_name.split('-')[1] == 'v3':
+            name, version, _ = FLAGS.env_name.split('-')
+            env_name = name + '-' + version
+            eval_envs = []
+            for i in range(FLAGS.eval_episodes): 
+                env = gym.make(FLAGS.env_name)
+                env = wrappers.EpisodeMonitor(env)
+                env = wrappers.SinglePrecision(env)
+                seed = FLAGS.seed + i
+                env.seed(seed)
+                env.action_space.seed(seed)
+                env.observation_space.seed(seed) 
+                eval_envs.append(env)
+                env.get_normalized_score = (lambda x: get_normalized_score_neorl(x, name))
         else:
-            env = gym.make(FLAGS.env_name)
-   
-    if FLAGS.dynamics == 'dreamerv2':
-        obs_dim, action_dim = env.observation_space.shape, env.action_space.shape[-1]
-        print(obs_dim, action_dim)
-        from dynamics.dreamer_model import get_dreamer_wm
-        if FLAGS.seed <= 3:
-            model_path = f'../dreamerv2-EP/models/{task}/{diff}/{FLAGS.seed}/final_model.pkl'
-        else:
-            model_path = f'../dreamerv2-EP/models/{task}/{diff}/1/final_model.pkl'
-        model_observe, model = get_dreamer_wm(model_path, obs_dim, action_dim, FLAGS.T)
-        env, raw_dataset, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, FLAGS.discount, model_observe)
-        scaler = (jnp.zeros((1,1)), jnp.ones((1,1)))
-    elif FLAGS.dynamics == 'torch': 
-        obs_dim, action_dim = env.observation_space.shape[-1], env.action_space.shape[-1]
-        print(obs_dim, action_dim)
-        termination_fn = get_termination_fn(task=FLAGS.env_name)
-        if 1 <= FLAGS.seed and FLAGS.seed <= 3:
-            print("TESTING SEEDS!")
-            model_path = os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', str(FLAGS.seed), env_name)
-        else:
-            model_path = os.path.join('../OfflineRL-Kit/models/dynamics-ensemble/', FLAGS.env_name)
-        from dynamics.ensemble_model_learner import get_world_model
-        env, raw_dataset, dataset, reward_scaler = make_env_and_dataset(FLAGS.env_name, FLAGS.seed, FLAGS.discount)
-        model, scaler = get_world_model(model_path, obs_dim, action_dim, reward_scaler, termination_fn)
-    else:
-        assert False, "Dynamics not given"
- 
-    if FLAGS.dynamics == 'dreamerv2':
-        eval_envs = []
-        for i in range(FLAGS.eval_episodes):
-            env = common.DMC(task, 2, (64, 64), -1, seed=FLAGS.seed + i)
-            env = common.NormalizeAction(env)
-            env = wrappers.EpisodeMonitor(env) 
-            #env = wrappers.SinglePrecision(env)   
-            eval_envs.append(env)
-    elif FLAGS.env_name.split('-')[1] == 'v3':
-        name, version, _ = FLAGS.env_name.split('-')
-        env_name = name + '-' + version
-        eval_envs = gym.vector.make(env_name, FLAGS.eval_episodes, exclude_current_positions_from_observation=False)
-        env.get_normalized_score = (lambda x: get_normalized_score_neorl(x, name))
-    else:
-        eval_envs = []
-        for i in range(FLAGS.eval_episodes): 
-            env = gym.make(FLAGS.env_name) 
-            env = wrappers.EpisodeMonitor(env) 
-            env = wrappers.SinglePrecision(env)   
-            seed = FLAGS.seed + i 
-            env.seed(seed)
-            env.action_space.seed(seed) 
-            env.observation_space.seed(seed) 
-            eval_envs.append(env)
+            eval_envs = []
+            for i in range(FLAGS.eval_episodes): 
+                env = gym.make(FLAGS.env_name)
+                env = wrappers.EpisodeMonitor(env)
+                env = wrappers.SinglePrecision(env)
+                seed = FLAGS.seed + i
+                env.seed(seed)
+                env.action_space.seed(seed)
+                env.observation_space.seed(seed) 
+                eval_envs.append(env)
 
-    data_batch = dataset.sample(FLAGS.batch_size)
-    print(data_batch.observations.shape)
-    print(data_batch.actions.shape)
+    #else:
+    #    eval_envs = gym.vector.make(FLAGS.env_name, FLAGS.eval_episodes)
+
+    '''
     print("Finished loading dataset")
     agent = Learner(FLAGS.seed,
-                    data_batch.observations,
-                    data_batch.actions,
-                    #np.repeat(env.observation_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
-                    #np.repeat(env.action_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
+                    np.repeat(env.observation_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
+                    np.repeat(env.action_space.sample()[np.newaxis], FLAGS.batch_size, axis=0),
                     max_steps=FLAGS.max_steps,
-                    model=model,
+                    dynamics_name=FLAGS.dynamics,
                     env_name=FLAGS.env_name,
                     cql_weight=FLAGS.cql_weight,
                     target_beta=FLAGS.target_beta,
                     max_q_backup=FLAGS.max_q_backup,
-                    scaler=scaler,
                     reward_scaler=reward_scaler,
                     horizon_length=FLAGS.horizon_length,
                     expectile=FLAGS.expectile,
@@ -279,13 +247,29 @@ def main(_):
                     num_repeat=FLAGS.num_repeat,
                     #sac_alpha=FLAGS.sac_alpha,
                     **kwargs)
+    '''
 
-    video_path = os.path.join(FLAGS.save_dir, 'videos', FLAGS.env_name, str(FLAGS.seed))
-    model_path = os.path.join(FLAGS.save_dir, 'models', FLAGS.env_name, str(FLAGS.seed))
+    video_path = os.path.join(FLAGS.save_dir, 'videos', FLAGS.env_name)
+    model_path = os.path.join(FLAGS.save_dir, 'models', FLAGS.env_name)
     os.makedirs(video_path, exist_ok=True)
     os.makedirs(model_path, exist_ok=True)
-    
-    rollout_dataset = ReplayBuffer(data_batch.observations.shape[1], data_batch.actions.shape[1], capacity=FLAGS.rollout_retain*FLAGS.rollout_length*FLAGS.rollout_batch_size)
+
+    if FLAGS.dynamics == 'torch':
+        pass
+
+    elif FLAGS.dynamics == 'dreamer':
+        pass
+
+    elif FLAGS.dynamics != 'oracle':
+        if FLAGS.load_dir is None:
+            file_dir = os.path.join('models', FLAGS.env_name, FLAGS.dynamics) 
+        else:
+            file_dir = FLAGS.load_dir
+        orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+        raw_restored = orbax_checkpointer.restore(file_dir)
+        agent.model = agent.model.replace(params = raw_restored['model'])
+
+    rollout_dataset = ReplayTimeBuffer(env.observation_space, env.action_space.shape[0], capacity=FLAGS.rollout_retain*FLAGS.rollout_length*FLAGS.rollout_batch_size, T=FLAGS.T)
 
     #model_batch_size = int(FLAGS.batch_size * FLAGS.model_batch_ratio)
     #data_batch_size = FLAGS.batch_size - model_batch_size
@@ -330,15 +314,15 @@ def main(_):
                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         '''
 
-        if i % FLAGS.eval_interval == 0:
+        if i % FLAGS.eval_interval == 0: 
             eval_stats = evaluate(FLAGS.seed, agent, eval_envs, video_path, i)
-            if raw_dataset is not None:
-                q_dataset = agent.critic(raw_dataset['observations'][::10], raw_dataset['actions'][::10])
-                np.save(os.path.join(video_path, f"q_values_dataset_{i}.npz"), q_dataset)
+            q1, q2 = agent.critic(raw_dataset['observations'][::10], raw_dataset['actions'][::10])
+            q_dataset = np.minimum(q1, q2)
+            np.save(os.path.join(video_path, f"q_values_dataset_{i}.npz"), q_dataset)
             
             for k, v in eval_stats.items():
-                #if k == 'return':
-                #    v = env.get_normalized_score(v)
+                if k == 'return':
+                    v = env.get_normalized_score(v)
                 #summary_writer.add_scalar(f'evaluation/average_{k}s', v, i)
                 run.log({f'evaluation/average_{k}s': v}, step=i)
             #summary_writer.flush()
@@ -347,7 +331,7 @@ def main(_):
             np.savetxt(os.path.join(FLAGS.save_dir, f'{FLAGS.seed}.txt'),
                        eval_returns,
                        fmt=['%d', '%.1f'])
-
+            
             params = {'actor': agent.actor.params,
                       'critic': agent.critic.params}
             with open(os.path.join(model_path, f'{FLAGS.seed}_{i}.pkl'), 'wb') as F:

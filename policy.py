@@ -40,7 +40,10 @@ class NormalTanhPolicy(nn.Module):
                  observations: jnp.ndarray,
                  temperature: float = 1.0,
                  training: bool = False) -> tfd.Distribution:
-        observations = (observations - self.scaler[0]) / self.scaler[1]
+
+        mu = self.scaler[0].reshape((1,) * (len(observations.shape) - 1) + (self.scaler[0].shape[-1],))
+        std = self.scaler[1].reshape((1,) * (len(observations.shape) - 1) + (self.scaler[1].shape[-1],))
+        observations = (observations - mu) / std
         outputs = MLP(self.hidden_dims,
                       activate_final=True,
                       dropout_rate=self.dropout_rate,
@@ -54,7 +57,8 @@ class NormalTanhPolicy(nn.Module):
                                     self.log_std_scale))(outputs)
         else:
             log_stds = self.param('log_stds', nn.initializers.zeros,
-                                  (1, self.action_dim))
+                                  (self.action_dim))
+            log_stds = log_stds.reshape((1,) * (len(observations.shape) - 1) + (log_stds.shape[-1],))
 
         log_std_min = self.log_std_min or LOG_STD_MIN
         log_std_max = self.log_std_max or LOG_STD_MAX
@@ -73,7 +77,7 @@ class NormalTanhPolicy(nn.Module):
             return base_dist
 
 
-@functools.partial(jax.jit, static_argnames=('actor_def', 'distribution'))
+#@functools.partial(jax.jit, static_argnames=('actor_def', 'distribution'))
 def _sample_actions(rng: PRNGKey,
                     actor: Model,
                     observations: np.ndarray,

@@ -13,7 +13,9 @@ class ValueCritic(nn.Module):
 
     @nn.compact
     def __call__(self, observations: jnp.ndarray) -> jnp.ndarray:
-        observations = (observations - self.scaler[0]) / self.scaler[1]
+        mu = self.scaler[0].reshape((1,) * (len(observations.shape) - 1) + (self.scaler[0].shape[-1],))
+        std = self.scaler[1].reshape((1,) * (len(observations.shape) - 1) + (self.scaler[1].shape[-1],))
+        observations = (observations - mu) / std
         critic = MLP((*self.hidden_dims, 1), use_norm=self.use_norm, use_symlog=True)(observations)
         return jnp.squeeze(critic, -1)
 
@@ -28,7 +30,9 @@ class Critic(nn.Module):
     def __call__(self, observations: jnp.ndarray,
                  actions: jnp.ndarray) -> jnp.ndarray:
         inputs = jnp.concatenate([observations, actions], -1)
-        inputs = (inputs - self.scaler[0]) / self.scaler[1]
+        mu = self.scaler[0].reshape((1,) * (len(inputs.shape) - 1) + (self.scaler[0].shape[-1],))
+        std = self.scaler[1].reshape((1,) * (len(inputs.shape) - 1) + (self.scaler[1].shape[-1],))
+        inputs = (inputs - mu) / std
         critic = MLP((*self.hidden_dims, 1),
                      activations=self.activations, use_norm=self.use_norm, use_symlog=True)(inputs)
         return jnp.squeeze(critic, -1)
@@ -47,4 +51,4 @@ class DoubleCritic(nn.Module):
                          activations=self.activations, use_norm=self.use_norm)(observations, actions)
         critic2 = Critic(self.scaler, self.hidden_dims,
                          activations=self.activations, use_norm=self.use_norm)(observations, actions)
-        return critic1, critic2
+        return critic1, critic1
